@@ -65,30 +65,37 @@ const SummaryCard = ({
   return (
     <div
       className={`
-        bg-white rounded-2xl p-5 border ${theme.border} shadow-sm hover:shadow-md
-        transition-all duration-200 flex flex-col justify-between
+        bg-white rounded-xl sm:rounded-2xl p-2.5 sm:p-5 border ${theme.border} shadow-xs hover:shadow-md
+        transition-all duration-200 flex flex-col justify-between overflow-hidden
         ${className}
       `}
     >
-      <div className="flex items-start justify-between">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">{title}</p>
+      <div className="flex items-start justify-between gap-1 sm:gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center space-x-1.5 mb-0.5 sm:mb-1">
+            <span className={`sm:hidden w-1.5 h-1.5 rounded-full ${theme.iconBg} shrink-0`} />
+            <p className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-slate-500 truncate">
+              {title}
+            </p>
+          </div>
           {loading ? (
-            <div className="h-8 w-24 bg-slate-200 animate-pulse rounded my-1" />
+            <div className="h-5 sm:h-8 w-14 sm:w-24 bg-slate-200 animate-pulse rounded my-1" />
           ) : (
-            <h4 className="text-2xl sm:text-3xl font-bold text-slate-800 tracking-tight">{value}</h4>
+            <h4 className="text-xs xs:text-sm sm:text-xl md:text-2xl lg:text-3xl font-black text-slate-800 tracking-tight whitespace-nowrap">
+              {value}
+            </h4>
           )}
         </div>
         {Icon && (
-          <div className={`p-3 rounded-xl ${theme.iconBg} shadow-sm shrink-0`}>
-            <Icon className="h-6 w-6" />
+          <div className={`hidden sm:flex p-2 md:p-3 rounded-xl ${theme.iconBg} shadow-xs shrink-0`}>
+            <Icon className="h-4 w-4 md:h-5 md:w-5" />
           </div>
         )}
       </div>
 
       {subtitle && (
-        <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
-          <span>{subtitle}</span>
+        <div className="mt-1.5 pt-1.5 sm:mt-3 sm:pt-3 border-t border-slate-100 flex items-center justify-between text-[9px] xs:text-[10px] sm:text-xs text-slate-500">
+          <span className="truncate">{subtitle}</span>
         </div>
       )}
     </div>

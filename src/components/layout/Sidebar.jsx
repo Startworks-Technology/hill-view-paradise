@@ -43,7 +43,7 @@ const Sidebar = ({ isOpen, onClose }) => {
       {/* Mobile backdrop overlay */}
       {isOpen && (
         <div
-          className="fixed inset-0 z-40 bg-slate-900/50 backdrop-blur-sm lg:hidden transition-opacity"
+          className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm lg:hidden transition-opacity"
           onClick={onClose}
         />
       )}
@@ -51,8 +51,8 @@ const Sidebar = ({ isOpen, onClose }) => {
       {/* Sidebar container (Fixed height, pinned in place) */}
       <aside
         className={`
-          fixed top-0 bottom-0 left-0 z-40 w-64 h-screen bg-slate-900 text-white flex flex-col justify-between shrink-0
-          transition-transform duration-300 ease-in-out lg:translate-x-0 lg:static
+          fixed top-0 bottom-0 left-0 z-50 w-72 max-w-[85vw] h-screen h-dvh bg-slate-900 text-white flex flex-col justify-between shrink-0
+          transition-transform duration-300 ease-in-out lg:translate-x-0 lg:static lg:h-screen lg:w-64 lg:z-auto
           ${isOpen ? 'translate-x-0' : '-translate-x-full'}
         `}
       >

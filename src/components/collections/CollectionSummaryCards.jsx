@@ -24,12 +24,12 @@ const CollectionSummaryCards = ({
   loading = false,
 }) => {
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+    <div className="grid grid-cols-3 gap-2 sm:gap-4">
       {/* Total Expected Revenue Card */}
       <SummaryCard
-        title="Total Expected"
+        title="Expected"
         value={formatCurrency(totalExpected)}
-        subtitle={`${paidCount + pendingCount} total occupied flats`}
+        subtitle={`${paidCount + pendingCount} units`}
         icon={PieChart}
         color="blue"
         loading={loading}
@@ -37,9 +37,9 @@ const CollectionSummaryCards = ({
 
       {/* Total Collected Revenue Card */}
       <SummaryCard
-        title="Total Collected"
+        title="Collected"
         value={formatCurrency(totalCollected)}
-        subtitle={`${paidCount} flats marked Paid`}
+        subtitle={`${paidCount} paid`}
         icon={CheckCircle}
         color="emerald"
         loading={loading}
@@ -47,9 +47,9 @@ const CollectionSummaryCards = ({
 
       {/* Total Pending Revenue Card */}
       <SummaryCard
-        title="Total Pending"
+        title="Pending"
         value={formatCurrency(totalPending)}
-        subtitle={`${pendingCount} flats pending payment`}
+        subtitle={`${pendingCount} pending`}
         icon={Clock}
         color={totalPending > 0 ? 'rose' : 'slate'}
         loading={loading}

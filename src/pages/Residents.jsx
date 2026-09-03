@@ -19,6 +19,8 @@ import {
   Sparkles,
   Home,
   Layers,
+  LayoutGrid,
+  Table as TableIcon,
 } from 'lucide-react';
 import Button from '../components/common/Button';
 import Input from '../components/common/Input';
@@ -48,9 +50,10 @@ const Residents = () => {
   const [actionLoading, setActionLoading] = useState(false);
   const [toast, setToast] = useState(null);
 
-  // Search and filter states
+  // Search, filter and view mode states
   const [searchTerm, setSearchTerm] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
+  const [viewMode, setViewMode] = useState('auto'); // 'auto' | 'grid' | 'table'
 
   // Modals state
   const [isFormOpen, setIsFormOpen] = useState(false);
@@ -212,9 +215,9 @@ const Residents = () => {
         )}
       </div>
 
-      {/* Filters Toolbar */}
-      <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col md:flex-row gap-3">
-        <div className="flex-1">
+      {/* Filters Toolbar with View Switcher */}
+      <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col md:flex-row items-center gap-3">
+        <div className="flex-1 w-full">
           <Input
             placeholder="Search by villa/plot number, resident name, phone, or email..."
             icon={Search}
@@ -223,13 +226,43 @@ const Residents = () => {
           />
         </div>
 
-        <div className="w-full md:w-56">
-          <Select
-            value={typeFilter}
-            onChange={(e) => setTypeFilter(e.target.value)}
-            options={PROPERTY_TYPES}
-            placeholder="All Property Types"
-          />
+        <div className="flex items-center gap-2 w-full md:w-auto">
+          <div className="flex-1 md:w-56">
+            <Select
+              value={typeFilter}
+              onChange={(e) => setTypeFilter(e.target.value)}
+              options={PROPERTY_TYPES}
+              placeholder="All Property Types"
+            />
+          </div>
+
+          {/* Desktop/Tablet View Mode Toggle */}
+          <div className="hidden sm:flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200 shrink-0">
+            <button
+              type="button"
+              onClick={() => setViewMode('grid')}
+              className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+                viewMode === 'grid'
+                  ? 'bg-white text-emerald-700 shadow-xs font-bold'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+              title="Card Grid View"
+            >
+              <LayoutGrid className="w-4 h-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('table')}
+              className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+                viewMode === 'table'
+                  ? 'bg-white text-emerald-700 shadow-xs font-bold'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+              title="Table View"
+            >
+              <TableIcon className="w-4 h-4" />
+            </button>
+          </div>
         </div>
       </div>
 
@@ -269,6 +302,7 @@ const Residents = () => {
         <ResidentTable
           residents={filteredResidents}
           isAuthenticated={isAuthenticated}
+          viewMode={viewMode}
           onView={(resident) => {
             setSelectedResidentForDetails(resident);
             setIsDetailsOpen(true);
