@@ -1,0 +1,31 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper function to check if the user is authenticated admin
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Rules for Residents collection
+    // Public read for everyone; write restricted to authenticated admin
+    match /residents/{residentId} {
+      allow read: if true;
+      allow write: if isAuthenticated();
+    }
+
+    // Rules for Collections (Maintenance payments)
+    // Public read for everyone; write restricted to authenticated admin
+    match /collections/{collectionId} {
+      allow read: if true;
+      allow write: if isAuthenticated();
+    }
+
+    // Rules for Expenses collection
+    // Public read for everyone; write restricted to authenticated admin
+    match /expenses/{expenseId} {
+      allow read: if true;
+      allow write: if isAuthenticated();
+    }
+  }
+}
