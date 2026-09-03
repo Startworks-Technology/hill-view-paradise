@@ -34,6 +34,7 @@ const ResidentFormModal = ({
     propertyType: 'Villa',
     villaNumber: '',
     plotSize: '',
+    outstandingBalance: '',
     phone: '',
     email: '',
   });
@@ -48,6 +49,7 @@ const ResidentFormModal = ({
         propertyType: initialData.propertyType || 'Villa',
         villaNumber: initialData.villaNumber || initialData.flatNumber || '',
         plotSize: initialData.plotSize ? String(initialData.plotSize) : '',
+        outstandingBalance: initialData.outstandingBalance !== undefined ? String(initialData.outstandingBalance) : '0',
         phone: initialData.phone || '',
         email: initialData.email || '',
       });
@@ -57,6 +59,7 @@ const ResidentFormModal = ({
         propertyType: 'Villa',
         villaNumber: '',
         plotSize: '',
+        outstandingBalance: '0',
         phone: '',
         email: '',
       });
@@ -97,6 +100,10 @@ const ResidentFormModal = ({
       newErrors.email = 'Please enter a valid email address';
     }
 
+    if (formData.outstandingBalance && isNaN(Number(formData.outstandingBalance))) {
+      newErrors.outstandingBalance = 'Please enter a valid number for outstanding balance';
+    }
+
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
@@ -116,6 +123,7 @@ const ResidentFormModal = ({
       flatNumber: unitIdentifier,
       plotSize: isPlot ? Number(formData.plotSize) : 0,
       monthlyMaintenance: calculatedMaintenance,
+      outstandingBalance: Number(formData.outstandingBalance) || 0,
       phone: formData.phone.trim(),
       email: formData.email.trim(),
     });
@@ -172,8 +180,7 @@ const ResidentFormModal = ({
             /* If Plot: Show Plot Size directly in the 2nd column */
             <Input
               label="Plot Size (in Square Yards)"
-              type="number"
-              min="1"
+              inputMode="decimal"
               placeholder="e.g. 500"
               value={formData.plotSize}
               onChange={(e) => setFormData({ ...formData, plotSize: e.target.value })}
@@ -201,6 +208,20 @@ const ResidentFormModal = ({
             {formatCurrency(calculatedMaintenance)}
             <span className="text-[10px] text-slate-400 font-normal"> /mo</span>
           </span>
+        </div>
+
+        {/* Outstanding Balance Field */}
+        <div>
+          <Input
+            label="Outstanding Balance (₹)"
+            inputMode="decimal"
+            placeholder="0"
+            helperText="Current unpaid balance or legacy dues (Enter 0 if clear)"
+            value={formData.outstandingBalance}
+            onChange={(e) => setFormData({ ...formData, outstandingBalance: e.target.value })}
+            error={errors.outstandingBalance}
+            disabled={loading}
+          />
         </div>
 
         {/* Optional Contact: Phone & Email */}

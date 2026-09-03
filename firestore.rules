@@ -27,5 +27,19 @@ service cloud.firestore {
       allow read: if true;
       allow write: if isAuthenticated();
     }
+
+    // Rules for Gallery (Photos & Videos metadata with Drive links)
+    // Public read for everyone; write restricted to authenticated admin
+    match /gallery/{mediaId} {
+      allow read: if true;
+      allow write: if isAuthenticated();
+    }
+
+    // Rules for Gallery Folders (Google Shared Drive monthly folders)
+    // Public read for everyone; write restricted to authenticated admin
+    match /gallery_folders/{folderId} {
+      allow read: if true;
+      allow write: if isAuthenticated();
+    }
   }
 }

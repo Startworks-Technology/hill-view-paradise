@@ -63,15 +63,16 @@ export const AuthProvider = ({ children }) => {
   };
 
   /**
-   * Sign out the active administrator session.
+   * Sign out the active user session.
    */
   const logout = async () => {
     setAuthError(null);
     try {
       await logoutAdmin();
-      setCurrentUser(null);
     } catch (err) {
       console.error('Logout error:', err);
+    } finally {
+      setCurrentUser(null);
     }
   };
 
@@ -82,6 +83,7 @@ export const AuthProvider = ({ children }) => {
     login,
     logout,
     isAuthenticated: Boolean(currentUser),
+    isAdmin: Boolean(currentUser),
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

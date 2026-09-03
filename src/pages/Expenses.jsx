@@ -41,7 +41,7 @@ import { EXPENSE_CATEGORIES } from '../utils/constants';
 import { getMonthName } from '../utils/dateUtils';
 
 const Expenses = () => {
-  const { isAuthenticated } = useAuth();
+  const { isAdmin } = useAuth();
 
   const currentDate = new Date();
   const [selectedMonth, setSelectedMonth] = useState(currentDate.getMonth() + 1);
@@ -100,7 +100,7 @@ const Expenses = () => {
 
   // Handle Form Submit
   const handleFormSubmit = async (formData) => {
-    if (!isAuthenticated) return;
+    if (!isAdmin) return;
 
     try {
       setActionLoading(true);
@@ -123,7 +123,7 @@ const Expenses = () => {
 
   // Handle Delete Confirm
   const handleDeleteConfirm = async () => {
-    if (!isAuthenticated) return;
+    if (!isAdmin) return;
     if (!selectedExpenseForDelete) return;
 
     try {
@@ -180,7 +180,7 @@ const Expenses = () => {
           />
 
           {/* Add Expense button ONLY rendered for logged-in Admin */}
-          {isAuthenticated && (
+          {isAdmin && (
             <Button
               variant="primary"
               icon={Plus}
@@ -232,9 +232,9 @@ const Expenses = () => {
         <EmptyState
           icon={Receipt}
           title={`No expenses recorded for ${monthName} ${selectedYear}.`}
-          description={isAuthenticated ? "Click '+ Add Expense' above to record bills and payments for this month." : "No expense vouchers logged for this month."}
-          actionLabel={isAuthenticated ? "+ Add Expense" : null}
-          onAction={isAuthenticated ? () => {
+          description={isAdmin ? "Click '+ Add Expense' above to record bills and payments for this month." : "No expense vouchers logged for this month."}
+          actionLabel={isAdmin ? "+ Add Expense" : null}
+          onAction={isAdmin ? () => {
             setSelectedExpenseForEdit(null);
             setIsFormOpen(true);
           } : null}
@@ -258,7 +258,7 @@ const Expenses = () => {
       ) : (
         <ExpenseTable
           expenses={filteredExpenses}
-          isAuthenticated={isAuthenticated}
+          isAuthenticated={isAdmin}
           onEdit={(exp) => {
             setSelectedExpenseForEdit(exp);
             setIsFormOpen(true);

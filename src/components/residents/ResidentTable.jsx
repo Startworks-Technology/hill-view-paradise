@@ -73,11 +73,31 @@ const ResidentTable = ({
                 </div>
               </div>
 
-              {/* Middle Row: Resident Name & Contact Details */}
+              {/* Middle Row: Resident Name, Outstanding & Contact Details */}
               <div className="pt-3 space-y-2">
-                <div>
-                  <p className="text-sm font-bold text-slate-900">{resident.residentName}</p>
-                  <p className="text-[11px] text-slate-400">Registered Owner / Resident</p>
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-bold text-slate-900">{resident.residentName}</p>
+                    <p className="text-[11px] text-slate-400">Registered Owner / Resident</p>
+                  </div>
+                  <div>
+                    {(Number(resident.outstandingBalance) || 0) > 0 ? (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-lg text-xs font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                        {formatCurrency(resident.outstandingBalance)}
+                        <span className="ml-1 text-[10px] font-semibold text-rose-500">Due</span>
+                      </span>
+                    ) : (Number(resident.outstandingBalance) || 0) < 0 ? (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-lg text-xs font-bold bg-blue-50 text-blue-700 border border-blue-200">
+                        {formatCurrency(Math.abs(resident.outstandingBalance))}
+                        <span className="ml-1 text-[10px] font-semibold text-blue-500">Cr</span>
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-lg text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                        ₹0
+                        <span className="ml-1 text-[10px] font-semibold text-emerald-500">Clear</span>
+                      </span>
+                    )}
+                  </div>
                 </div>
 
                 {(resident.phone || resident.email) && (
@@ -151,6 +171,7 @@ const ResidentTable = ({
               <th scope="col" className="px-5 py-3.5">Type</th>
               <th scope="col" className="px-5 py-3.5">Plot Size</th>
               <th scope="col" className="px-5 py-3.5">Monthly Maintenance</th>
+              <th scope="col" className="px-5 py-3.5">Outstanding Balance</th>
               <th scope="col" className="px-5 py-3.5">Contact</th>
               <th scope="col" className="px-5 py-3.5 text-right">Actions</th>
             </tr>
@@ -161,6 +182,7 @@ const ResidentTable = ({
               const unitNumber = resident.villaNumber || resident.flatNumber || '—';
               const plotSize = resident.plotSize ? `${resident.plotSize} sq. yd` : '—';
               const maintenance = resident.monthlyMaintenance || (isPlot ? (Number(resident.plotSize) || 0) * 3 : 3000);
+              const outstanding = Number(resident.outstandingBalance) || 0;
 
               return (
                 <tr
@@ -211,6 +233,26 @@ const ResidentTable = ({
                   <td className="whitespace-nowrap px-5 py-3.5 font-bold text-emerald-600">
                     {formatCurrency(maintenance)}
                     <span className="text-[10px] text-slate-400 font-normal"> /mo</span>
+                  </td>
+
+                  {/* Outstanding Balance */}
+                  <td className="whitespace-nowrap px-5 py-3.5">
+                    {outstanding > 0 ? (
+                      <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                        {formatCurrency(outstanding)}
+                        <span className="ml-1 text-[10px] font-semibold text-rose-500">Due</span>
+                      </span>
+                    ) : outstanding < 0 ? (
+                      <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-bold bg-blue-50 text-blue-700 border border-blue-200">
+                        {formatCurrency(Math.abs(outstanding))}
+                        <span className="ml-1 text-[10px] font-semibold text-blue-500">Cr</span>
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                        ₹0
+                        <span className="ml-1 text-[10px] font-semibold text-emerald-500">Clear</span>
+                      </span>
+                    )}
                   </td>
 
                   {/* Contact Phone & Email */}

@@ -209,9 +209,7 @@ const CollectionFormModal = ({
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Input
             label="Amount (₹)"
-            type="number"
-            min="0"
-            step="50"
+            inputMode="decimal"
             placeholder="Select a resident above or enter amount"
             value={formData.amount}
             onChange={(e) => setFormData({ ...formData, amount: e.target.value })}

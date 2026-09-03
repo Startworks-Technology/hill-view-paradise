@@ -15,13 +15,16 @@
  * @param {boolean} includeDecimals - Whether to display paise decimals (.00)
  * @returns {string} Formatted currency string
  */
-export const formatCurrency = (amount, includeDecimals = false) => {
+export const formatCurrency = (amount, includeDecimals) => {
   const num = Number(amount) || 0;
+  const hasDecimals = num % 1 !== 0;
+  const showDecimals = typeof includeDecimals === 'boolean' ? includeDecimals : hasDecimals;
+
   return new Intl.NumberFormat('en-IN', {
     style: 'currency',
     currency: 'INR',
-    maximumFractionDigits: includeDecimals ? 2 : 0,
-    minimumFractionDigits: includeDecimals ? 2 : 0,
+    maximumFractionDigits: 2,
+    minimumFractionDigits: showDecimals ? 2 : 0,
   }).format(num);
 };
 

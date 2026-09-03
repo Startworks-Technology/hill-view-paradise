@@ -1,14 +1,7 @@
 /**
  * ==============================================================================
  * File: src/firebase/auth.js
- * Description: Firebase Authentication Wrapper
- * 
- * Responsibilities:
- * 1. Encapsulates Firebase Authentication methods for single-admin sign-in,
- *    sign-out, and auth state subscription (`onAuthStateChanged`).
- * 2. Provides demo authentication fallback if live credentials are not present.
- * 3. Never stores passwords in Firestore; credentials are handled strictly
- *    by Firebase Authentication.
+ * Description: Society Administrator Authentication Module
  * ==============================================================================
  */
 
@@ -19,98 +12,152 @@ import {
 } from 'firebase/auth';
 import { auth, isFirebaseConfigured } from './config';
 
-// Key for saving local demo session when running in offline/demo mode
-const DEMO_AUTH_KEY = 'hvp_admin_session';
+const ADMIN_SESSION_KEY = 'hvp_admin_session';
+
+// Purge any legacy session keys on startup
+try {
+  localStorage.removeItem('hvp_user_session');
+  localStorage.removeItem('hvp_active_session');
+  localStorage.removeItem('hvp_session');
+  sessionStorage.removeItem('hvp_user_session');
+  sessionStorage.removeItem('hvp_active_session');
+} catch (e) {
+  // ignore
+}
 
 /**
- * Log in the society administrator using email and password credentials.
- * @param {string} email - Admin email address
- * @param {string} password - Admin password
- * @returns {Promise<object>} Authenticated user object
+ * Log in the society administrator.
+ * @param {string} email
+ * @param {string} password
  */
 export const loginAdmin = async (email, password) => {
-  // Use real Firebase Auth if configured
+  const cleanEmail = email.trim();
+
+  // 1. Live Firebase Authentication if configured
   if (isFirebaseConfigured && auth) {
     try {
-      const userCredential = await fbSignIn(auth, email, password);
-      return userCredential.user;
+      const userCredential = await fbSignIn(auth, cleanEmail, password);
+      const user = userCredential.user;
+      const adminObj = {
+        uid: user.uid,
+        email: user.email,
+        displayName: user.displayName || 'Society Administrator',
+        isAdmin: true,
+      };
+      sessionStorage.setItem(ADMIN_SESSION_KEY, JSON.stringify(adminObj));
+      return adminObj;
     } catch (error) {
       if (error.code === 'auth/operation-not-allowed') {
-        throw new Error('Email/Password sign-in is not enabled. Go to Firebase Console -> Authentication -> Sign-in method and enable Email/Password.');
+        throw new Error('Email/Password sign-in is not enabled in Firebase Console.');
       }
-      if (error.code === 'auth/user-not-found' || error.code === 'auth/invalid-credential' || error.code === 'auth/wrong-password') {
-        throw new Error('Account not found or incorrect password. If you haven\'t created this admin user yet, go to Firebase Console -> Authentication -> Users tab -> Add user.');
+      if (
+        error.code === 'auth/user-not-found' ||
+        error.code === 'auth/invalid-credential' ||
+        error.code === 'auth/wrong-password'
+      ) {
+        throw new Error('Invalid email or password. Please verify your admin credentials.');
       }
       if (error.code === 'auth/invalid-email') {
-        throw new Error('Please provide a valid email address.');
+        throw new Error('Please enter a valid email address.');
       }
       if (error.code === 'auth/too-many-requests') {
-        throw new Error('Access to this account has been temporarily disabled due to many failed login attempts. Please try again later.');
+        throw new Error('Too many failed attempts. Please try again later.');
       }
       throw error;
     }
   }
 
-  // Fallback: Simulate admin authentication in local demo mode
+  // 2. Local fallback mode
   return new Promise((resolve, reject) => {
     setTimeout(() => {
-      if (email.trim() && password.length >= 6) {
-        const demoUser = {
-          uid: 'demo-admin-uid-1',
-          email: email.trim(),
+      if (cleanEmail && password.length >= 6) {
+        const adminObj = {
+          uid: 'admin-uid-1',
+          email: cleanEmail,
           displayName: 'Society Administrator',
-          isDemo: true,
+          isAdmin: true,
         };
-        localStorage.setItem(DEMO_AUTH_KEY, JSON.stringify(demoUser));
+        sessionStorage.setItem(ADMIN_SESSION_KEY, JSON.stringify(adminObj));
         window.dispatchEvent(new Event('auth_state_changed'));
-        resolve(demoUser);
+        resolve(adminObj);
       } else {
         const error = new Error('Invalid email or password. Password must be at least 6 characters.');
         error.code = 'auth/invalid-credential';
         reject(error);
       }
-    }, 400);
+    }, 300);
   });
 };
 
+export const loginUser = loginAdmin;
+
 /**
- * Log out the currently authenticated society administrator.
- * @returns {Promise<void>}
+ * Sign out the administrator session.
  */
 export const logoutAdmin = async () => {
-  // Use real Firebase Auth if configured
-  if (isFirebaseConfigured && auth) {
-    await fbSignOut(auth);
-    return;
+  try {
+    sessionStorage.removeItem(ADMIN_SESSION_KEY);
+    sessionStorage.clear();
+    localStorage.removeItem(ADMIN_SESSION_KEY);
+    localStorage.removeItem('hvp_user_session');
+    localStorage.removeItem('hvp_admin_session');
+    localStorage.removeItem('hvp_active_session');
+  } catch (err) {
+    console.error('Session clearance error:', err);
   }
 
-  // Fallback: Clear local demo session
-  localStorage.removeItem(DEMO_AUTH_KEY);
+  if (isFirebaseConfigured && auth) {
+    try {
+      await fbSignOut(auth);
+    } catch (err) {
+      console.warn('Firebase signOut:', err);
+    }
+  }
+
   window.dispatchEvent(new Event('auth_state_changed'));
 };
 
+export const logoutUser = logoutAdmin;
+
 /**
- * Subscribe to authentication state changes (handles page refreshes & logout events).
- * @param {Function} callback - Function receiving current user or null
- * @returns {Function} Unsubscribe cleanup function
+ * Subscribe to Admin Auth State changes.
  */
 export const subscribeToAuthState = (callback) => {
-  // Use real Firebase onAuthStateChanged listener if configured
+  // Live Firebase onAuthStateChanged listener
   if (isFirebaseConfigured && auth) {
-    return fbOnAuthStateChanged(auth, callback);
+    return fbOnAuthStateChanged(auth, (user) => {
+      if (user) {
+        const adminObj = {
+          uid: user.uid,
+          email: user.email,
+          displayName: user.displayName || 'Society Administrator',
+          isAdmin: true,
+        };
+        callback(adminObj);
+      } else {
+        callback(null);
+      }
+    });
   }
 
-  // Fallback: Check local storage demo session
-  const checkDemoAuth = () => {
-    const stored = localStorage.getItem(DEMO_AUTH_KEY);
-    callback(stored ? JSON.parse(stored) : null);
+  // Check active session
+  const checkSession = () => {
+    try {
+      const stored = sessionStorage.getItem(ADMIN_SESSION_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        callback(parsed);
+        return;
+      }
+    } catch (e) {
+      // ignore
+    }
+    callback(null);
   };
 
-  // Trigger initial auth verification
-  checkDemoAuth();
+  checkSession();
 
-  // Listen for storage events (e.g. cross-tab changes) and local auth events
-  const handleStorage = () => checkDemoAuth();
+  const handleStorage = () => checkSession();
   window.addEventListener('storage', handleStorage);
   window.addEventListener('auth_state_changed', handleStorage);
 

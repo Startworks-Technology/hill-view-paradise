@@ -12,17 +12,16 @@
  */
 
 import React from 'react';
-import { NavLink, Link, useLocation } from 'react-router-dom';
+import { NavLink, Link, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard,
   Users,
   Wallet,
   Receipt,
+  Images,
   LogOut,
   Building2,
-  Lock,
   X,
-  Eye,
 } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
 
@@ -32,11 +31,18 @@ const navItems = [
   { name: 'Society & Residents', path: '/residents', icon: Users },
   { name: 'Collections', path: '/collections', icon: Wallet },
   { name: 'Expenses', path: '/expenses', icon: Receipt },
+  { name: 'Media Gallery', path: '/gallery', icon: Images },
 ];
 
 const Sidebar = ({ isOpen, onClose }) => {
-  const { logout, currentUser, isAuthenticated } = useAuth();
-  const location = useLocation();
+  const { logout, currentUser } = useAuth();
+  const navigate = useNavigate();
+
+  const handleLogout = async () => {
+    if (onClose) onClose();
+    await logout();
+    navigate('/login', { replace: true });
+  };
 
   return (
     <>
@@ -110,48 +116,35 @@ const Sidebar = ({ isOpen, onClose }) => {
           </nav>
         </div>
 
-        {/* Footer with Session Info & Admin Toggle */}
+        {/* Footer with Authenticated Admin Info & Sign Out */}
         <div className="p-4 border-t border-slate-800">
-          {isAuthenticated ? (
-            <div>
-              <div className="px-3 py-2 mb-2 flex items-center space-x-3">
-                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-800 text-xs font-bold text-emerald-400 border border-slate-700">
-                  AD
-                </div>
-                <div className="overflow-hidden">
-                  <p className="text-xs font-semibold text-white truncate">
-                    {currentUser?.displayName || 'Administrator'}
-                  </p>
-                  <p className="text-[11px] text-slate-400 truncate">{currentUser?.email || 'admin@society.com'}</p>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                onClick={logout}
-                className="w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-xl text-sm font-medium text-rose-400 hover:bg-rose-500/10 hover:text-rose-300 transition-colors"
-              >
-                <LogOut className="h-4 w-4 shrink-0" />
-                <span>Sign Out Admin</span>
-              </button>
+          <div className="px-3 py-2 mb-3 flex items-center space-x-3 rounded-xl bg-slate-800/60 border border-slate-700/60">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+              AD
             </div>
-          ) : (
-            <div>
-              <div className="px-3 py-2 mb-2 flex items-center space-x-2 text-xs text-slate-400">
-                <Eye className="w-4 h-4 text-emerald-400 shrink-0" />
-                <span>Public View (Read-Only)</span>
+            <div className="overflow-hidden min-w-0 flex-1">
+              <p className="text-xs font-semibold text-white truncate">
+                {currentUser?.displayName || 'Society Administrator'}
+              </p>
+              <p className="text-[11px] text-slate-400 truncate">
+                {currentUser?.email || 'admin@hillviewparadise.com'}
+              </p>
+              <div className="mt-1">
+                <span className="inline-flex items-center px-1.5 py-0.2 text-[10px] font-semibold rounded-sm bg-emerald-500/20 text-emerald-300">
+                  Administrator
+                </span>
               </div>
-
-              <Link
-                to="/login"
-                state={{ from: location }}
-                className="w-full flex items-center justify-center space-x-2 px-3.5 py-2.5 rounded-xl text-sm font-semibold bg-emerald-600 hover:bg-emerald-500 text-white shadow-md transition-colors"
-              >
-                <Lock className="h-4 w-4 shrink-0" />
-                <span>Admin Login</span>
-              </Link>
             </div>
-          )}
+          </div>
+
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="w-full flex items-center justify-center space-x-2 px-3.5 py-2.5 rounded-xl text-xs font-semibold text-rose-400 bg-rose-500/10 hover:bg-rose-500/20 hover:text-rose-300 border border-rose-500/20 transition-colors cursor-pointer"
+          >
+            <LogOut className="h-4 w-4 shrink-0" />
+            <span>Sign Out</span>
+          </button>
         </div>
       </aside>
     </>

@@ -25,6 +25,7 @@ import {
   serverTimestamp,
   Timestamp,
 } from '../firebase/firestore';
+import { adjustResidentOutstanding } from './residentService';
 
 // Firestore collection name
 const COLLECTION_NAME = 'collections';
@@ -166,10 +167,11 @@ export const createCollection = async (collectionData) => {
 
   assertNoArrayFields(payload);
 
+  let createdDoc = null;
   if (isFirebaseConfigured && db) {
     try {
       const docRef = await addDoc(collection(db, COLLECTION_NAME), payload);
-      return {
+      createdDoc = {
         id: docRef.id,
         ...payload,
       };
@@ -178,14 +180,44 @@ export const createCollection = async (collectionData) => {
     }
   }
 
+  if (!createdDoc) {
+    const localList = getLocalCollections();
+    createdDoc = {
+      id: 'col_' + Date.now() + Math.random().toString(36).substring(2, 7),
+      ...payload,
+    };
+    localList.push(createdDoc);
+    saveLocalCollections(localList);
+  }
+
+  // If created as Paid, deduct amount from resident's outstanding balance
+  if (payload.status === 'Paid' && payload.residentId) {
+    await adjustResidentOutstanding(payload.residentId, -numAmount);
+  }
+
+  return createdDoc;
+};
+
+/**
+ * Fetch a single collection document by its unique ID.
+ * @param {string} collectionId
+ * @returns {Promise<object|null>}
+ */
+export const getCollectionById = async (collectionId) => {
+  if (!collectionId) return null;
+  if (isFirebaseConfigured && db) {
+    try {
+      const docRef = doc(db, COLLECTION_NAME, collectionId);
+      const snap = await getDoc(docRef);
+      if (snap.exists()) {
+        return { id: snap.id, ...snap.data() };
+      }
+    } catch (err) {
+      console.warn('Firestore getCollectionById warning:', err);
+    }
+  }
   const localList = getLocalCollections();
-  const newCollection = {
-    id: 'col_' + Date.now() + Math.random().toString(36).substring(2, 7),
-    ...payload,
-  };
-  localList.push(newCollection);
-  saveLocalCollections(localList);
-  return newCollection;
+  return localList.find((c) => c.id === collectionId) || null;
 };
 
 /**
@@ -197,6 +229,11 @@ export const createCollection = async (collectionData) => {
  */
 export const updateCollection = async (collectionId, updateData) => {
   if (!collectionId) throw new Error('Collection ID is required');
+
+  const oldDoc = await getCollectionById(collectionId);
+  const oldStatus = oldDoc?.status || 'Pending';
+  const oldAmount = Number(oldDoc?.amount) || 0;
+  const residentId = updateData.residentId || oldDoc?.residentId;
 
   const numMonth = Number(updateData.month);
   const numYear = Number(updateData.year);
@@ -233,10 +270,6 @@ export const updateCollection = async (collectionId, updateData) => {
     try {
       const docRef = doc(db, COLLECTION_NAME, collectionId);
       await updateDoc(docRef, payload);
-      return {
-        id: collectionId,
-        ...payload,
-      };
     } catch (error) {
       console.warn('Firestore updateDoc collection error (falling back to local storage):', error);
     }
@@ -244,14 +277,34 @@ export const updateCollection = async (collectionId, updateData) => {
 
   const localList = getLocalCollections();
   const index = localList.findIndex((c) => c.id === collectionId);
-  if (index === -1) throw new Error('Collection record not found to update');
+  if (index !== -1) {
+    localList[index] = {
+      ...localList[index],
+      ...payload,
+    };
+    saveLocalCollections(localList);
+  }
 
-  localList[index] = {
-    ...localList[index],
+  // Adjust resident outstanding balance on status / amount transition
+  if (residentId) {
+    const newStatus = payload.status;
+    if (oldStatus !== 'Paid' && newStatus === 'Paid') {
+      // Changed from Pending to Paid -> deduct new amount
+      await adjustResidentOutstanding(residentId, -numAmount);
+    } else if (oldStatus === 'Paid' && newStatus !== 'Paid') {
+      // Changed from Paid to Pending -> restore old amount
+      await adjustResidentOutstanding(residentId, +oldAmount);
+    } else if (oldStatus === 'Paid' && newStatus === 'Paid' && oldAmount !== numAmount) {
+      // Both Paid but amount changed -> adjust difference
+      await adjustResidentOutstanding(residentId, -(numAmount - oldAmount));
+    }
+  }
+
+  return {
+    id: collectionId,
+    ...(oldDoc || {}),
     ...payload,
   };
-  saveLocalCollections(localList);
-  return localList[index];
 };
 
 /**
@@ -262,11 +315,12 @@ export const updateCollection = async (collectionId, updateData) => {
 export const deleteCollection = async (collectionId) => {
   if (!collectionId) throw new Error('Collection ID is required');
 
+  const oldDoc = await getCollectionById(collectionId);
+
   if (isFirebaseConfigured && db) {
     try {
       const docRef = doc(db, COLLECTION_NAME, collectionId);
       await deleteDoc(docRef);
-      return;
     } catch (error) {
       console.warn('Firestore deleteDoc collection error (falling back to local storage):', error);
     }
@@ -275,4 +329,9 @@ export const deleteCollection = async (collectionId) => {
   const localList = getLocalCollections();
   const filtered = localList.filter((c) => c.id !== collectionId);
   saveLocalCollections(filtered);
+
+  // If deleted collection was Paid, restore the amount to resident outstanding balance
+  if (oldDoc && oldDoc.status === 'Paid' && oldDoc.residentId) {
+    await adjustResidentOutstanding(oldDoc.residentId, Number(oldDoc.amount) || 0);
+  }
 };

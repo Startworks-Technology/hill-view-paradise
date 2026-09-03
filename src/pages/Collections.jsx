@@ -19,6 +19,7 @@ import {
   Wallet,
   Plus,
   Search,
+  ArrowRightLeft,
 } from 'lucide-react';
 import Button from '../components/common/Button';
 import Input from '../components/common/Input';
@@ -38,12 +39,13 @@ import {
   updateCollection,
   deleteCollection,
 } from '../services/collectionService';
-import { getResidents } from '../services/residentService';
+import { getResidents, rolloverUnpaidMonth } from '../services/residentService';
 import { COLLECTION_STATUSES } from '../utils/constants';
 import { getMonthName } from '../utils/dateUtils';
+import { formatCurrency } from '../utils/currencyUtils';
 
 const Collections = () => {
-  const { isAuthenticated } = useAuth();
+  const { isAdmin } = useAuth();
 
   const currentDate = new Date();
   const [selectedMonth, setSelectedMonth] = useState(currentDate.getMonth() + 1);
@@ -65,6 +67,8 @@ const Collections = () => {
 
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const [selectedCollectionForDelete, setSelectedCollectionForDelete] = useState(null);
+
+  const [isRolloverOpen, setIsRolloverOpen] = useState(false);
 
   // Fetch collections and residents concurrently for the active month & year
   const fetchData = async () => {
@@ -102,6 +106,33 @@ const Collections = () => {
   const paidCount = paidCollections.length;
   const pendingCount = Math.max(0, residents.length - paidCount);
 
+  // Handle Rollover Confirm
+  const handleRolloverConfirm = async () => {
+    if (!isAdmin) return;
+
+    try {
+      setActionLoading(true);
+      const res = await rolloverUnpaidMonth(selectedMonth, selectedYear, collections);
+      if (res.billedCount > 0) {
+        setToast({
+          type: 'success',
+          message: `Added ${formatCurrency(res.totalBilled)} across ${res.billedCount} unpaid properties to their outstanding balance for ${monthName} ${selectedYear}.`,
+        });
+      } else {
+        setToast({
+          type: 'info',
+          message: `No new unpaid properties found or all have already been billed for ${monthName} ${selectedYear}.`,
+        });
+      }
+      setIsRolloverOpen(false);
+      await fetchData();
+    } catch (error) {
+      setToast({ type: 'error', message: error.message || 'Failed to roll over unpaid dues.' });
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   // Filtered collections
   const filteredCollections = useMemo(() => {
     return collections.filter((col) => {
@@ -119,7 +150,7 @@ const Collections = () => {
 
   // Handle Add/Edit form submit
   const handleFormSubmit = async (formData) => {
-    if (!isAuthenticated) return;
+    if (!isAdmin) return;
 
     try {
       setActionLoading(true);
@@ -142,7 +173,7 @@ const Collections = () => {
 
   // Handle Delete confirm
   const handleDeleteConfirm = async () => {
-    if (!isAuthenticated) return;
+    if (!isAdmin) return;
     if (!selectedCollectionForDelete) return;
 
     try {
@@ -175,7 +206,7 @@ const Collections = () => {
         />
       )}
 
-      {/* Top Header with Combined Month/Year Selector & Add Button */}
+      {/* Top Header with Combined Month/Year Selector & Action Buttons */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h1 className="text-xl font-bold text-slate-900 flex items-center">
@@ -187,7 +218,7 @@ const Collections = () => {
           </p>
         </div>
 
-        {/* Combined Month & Year Picker + Add Button */}
+        {/* Combined Month & Year Picker + Actions */}
         <div className="flex flex-wrap items-center gap-3">
           <MonthYearPicker
             month={selectedMonth}
@@ -198,18 +229,30 @@ const Collections = () => {
             }}
           />
 
-          {/* Add Collection button ONLY rendered for logged-in Admin */}
-          {isAuthenticated && (
-            <Button
-              variant="primary"
-              icon={Plus}
-              onClick={() => {
-                setSelectedCollectionForEdit(null);
-                setIsFormOpen(true);
-              }}
-            >
-              Add Collection
-            </Button>
+          {/* Admin Actions */}
+          {isAdmin && (
+            <>
+              {pendingCount > 0 && (
+                <Button
+                  variant="secondary"
+                  icon={ArrowRightLeft}
+                  onClick={() => setIsRolloverOpen(true)}
+                  title="Roll over unpaid maintenance to resident outstanding balances"
+                >
+                  Roll Over Unpaid ({pendingCount})
+                </Button>
+              )}
+              <Button
+                variant="primary"
+                icon={Plus}
+                onClick={() => {
+                  setSelectedCollectionForEdit(null);
+                  setIsFormOpen(true);
+                }}
+              >
+                Add Collection
+              </Button>
+            </>
           )}
         </div>
       </div>
@@ -254,9 +297,9 @@ const Collections = () => {
         <EmptyState
           icon={Wallet}
           title={`No maintenance collections found for ${monthName} ${selectedYear}.`}
-          description={isAuthenticated ? "Click '+ Add Collection' above to record maintenance collections for this month." : "No collections logged for this month."}
-          actionLabel={isAuthenticated ? "+ Add Collection" : null}
-          onAction={isAuthenticated ? () => {
+          description={isAdmin ? "Click '+ Add Collection' above to record maintenance collections for this month." : "No collections logged for this month."}
+          actionLabel={isAdmin ? "+ Add Collection" : null}
+          onAction={isAdmin ? () => {
             setSelectedCollectionForEdit(null);
             setIsFormOpen(true);
           } : null}
@@ -280,7 +323,7 @@ const Collections = () => {
       ) : (
         <CollectionTable
           collections={filteredCollections}
-          isAuthenticated={isAuthenticated}
+          isAuthenticated={isAdmin}
           onEdit={(col) => {
             setSelectedCollectionForEdit(col);
             setIsFormOpen(true);
@@ -318,6 +361,18 @@ const Collections = () => {
         title="Delete Collection Record?"
         message={`Are you sure you want to delete the maintenance record for ${selectedCollectionForDelete?.residentName} (${selectedCollectionForDelete?.flatNumber})?`}
         confirmText="Delete Record"
+        loading={actionLoading}
+      />
+
+      {/* Roll Over Unpaid Dues Confirmation Modal */}
+      <ConfirmModal
+        isOpen={isRolloverOpen}
+        onClose={() => setIsRolloverOpen(false)}
+        onConfirm={handleRolloverConfirm}
+        title={`Roll Over Unpaid Dues for ${monthName} ${selectedYear}?`}
+        message={`This will add the monthly maintenance fee for all ${pendingCount} unpaid properties to their stored Outstanding Balance. Units that have already been billed for this month will be skipped automatically.`}
+        confirmText="Apply to Outstanding"
+        confirmVariant="primary"
         loading={actionLoading}
       />
     </div>

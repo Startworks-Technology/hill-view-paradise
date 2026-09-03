@@ -24,6 +24,7 @@ import {
   orderBy,
   serverTimestamp,
   Timestamp,
+  increment,
 } from 'firebase/firestore';
 import { db, isFirebaseConfigured } from './config';
 
@@ -42,4 +43,5 @@ export {
   orderBy,
   serverTimestamp,
   Timestamp,
+  increment,
 };

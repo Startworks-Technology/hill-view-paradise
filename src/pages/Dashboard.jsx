@@ -24,22 +24,19 @@ import {
   Scale,
   Clock,
   ArrowUpRight,
-  Sparkles,
 } from 'lucide-react';
 import SummaryCard from '../components/common/SummaryCard';
-import Button from '../components/common/Button';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import Toast from '../components/common/Toast';
 import { getResidents } from '../services/residentService';
 import { getCollectionsByMonth } from '../services/collectionService';
 import { getExpensesByMonth } from '../services/expenseService';
-import { seedSampleData } from '../services/seedService';
 import { formatCurrency } from '../utils/currencyUtils';
 import { getMonthName } from '../utils/dateUtils';
 import { useAuth } from '../hooks/useAuth';
 
 const Dashboard = () => {
-  const { isAuthenticated } = useAuth();
+  const { isAdmin } = useAuth();
   const currentDate = new Date();
   const currentMonth = currentDate.getMonth() + 1;
   const currentYear = currentDate.getFullYear();
@@ -64,9 +61,9 @@ const Dashboard = () => {
       setResidents(resList);
       setCollections(colList);
       setExpenses(expList);
-    } catch (error) {
-      console.error('Error loading dashboard:', error);
-      setToast({ type: 'error', message: 'Unable to load dashboard metrics.' });
+    } catch (err) {
+      console.error('Failed to fetch dashboard data:', err);
+      setToast({ type: 'error', message: 'Failed to load dashboard metrics.' });
     } finally {
       setLoading(false);
     }
@@ -74,48 +71,40 @@ const Dashboard = () => {
 
   useEffect(() => {
     loadDashboardData();
-  }, []);
+  }, [currentMonth, currentYear]);
 
-  // One-click dataset seeding helper
-  const handleSeed = async () => {
-    try {
-      setActionLoading(true);
-      const res = await seedSampleData();
-      setToast({ type: res.success ? 'success' : 'info', message: res.message });
-      await loadDashboardData();
-    } catch (error) {
-      setToast({ type: 'error', message: 'Failed to seed sample dataset.' });
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  // Property counts: Villas vs Plots
-  const totalProperties = residents.length;
+  // Calculations
   const villaCount = residents.filter((r) => r.propertyType === 'Villa').length;
   const plotCount = residents.filter((r) => r.propertyType === 'Plot').length;
+  const totalProperties = residents.length;
 
-  // Total Expected = Sum of each property's individual monthly maintenance
-  // (Villa = ₹3,000, Plot = Plot Size * ₹3)
-  const totalExpected = residents.reduce((sum, r) => {
-    const rate = Number(r.monthlyMaintenance) || (r.propertyType === 'Plot' ? (Number(r.plotSize) || 0) * 3 : 3000);
-    return sum + rate;
-  }, 0);
-
-  // Collections metrics
   const paidCollections = collections.filter((c) => c.status === 'Paid');
   const totalCollected = paidCollections.reduce((sum, c) => sum + (Number(c.amount) || 0), 0);
 
-  // Expenses metrics
   const totalExpenses = expenses.reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
-
-  // Financial Balance = Total Collections - Total Expenses
   const currentMonthBalance = totalCollected - totalExpenses;
+
+  const totalExpected = residents.reduce((sum, r) => {
+    if (r.propertyType === 'Plot') {
+      return sum + (Number(r.plotSize) || 0) * 3;
+    }
+    return sum + (Number(r.monthlyMaintenance) || 3000);
+  }, 0);
+
   const totalPendingMaintenance = Math.max(0, totalExpected - totalCollected);
   const pendingUnitsCount = Math.max(0, totalProperties - paidCollections.length);
-
-  // Percentage collection efficiency
   const collectionRate = totalExpected > 0 ? Math.min(100, Math.round((totalCollected / totalExpected) * 100)) : 0;
+
+  const totalSocietyOutstanding = residents.reduce((sum, r) => sum + (Number(r.outstandingBalance) || 0), 0);
+  const defaultersCount = residents.filter((r) => (Number(r.outstandingBalance) || 0) > 0).length;
+
+  if (loading) {
+    return (
+      <div className="py-20 flex justify-center items-center">
+        <LoadingSpinner size="lg" text="Loading society metrics..." />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -126,28 +115,6 @@ const Dashboard = () => {
           message={toast.message}
           onClose={() => setToast(null)}
         />
-      )}
-
-      {/* Optional Seed Helper Banner only if DB is completely empty */}
-      {totalProperties === 0 && !loading && (
-        <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
-          <div className="flex items-center space-x-2 text-emerald-800 font-medium">
-            <Sparkles className="w-4 h-4 text-emerald-600 shrink-0" />
-            <span>Database is currently empty. Would you like to load a sample dataset with Villas, Plots, and collections?</span>
-          </div>
-          {isAuthenticated && (
-            <Button
-              variant="primary"
-              size="sm"
-              icon={Sparkles}
-              onClick={handleSeed}
-              loading={actionLoading}
-              className="shrink-0"
-            >
-              Seed Sample Data
-            </Button>
-          )}
-        </div>
       )}
 
       {/* 6 Key Summary Cards Grid */}
@@ -196,7 +163,11 @@ const Dashboard = () => {
         <SummaryCard
           title="Pending Maintenance"
           value={formatCurrency(totalPendingMaintenance)}
-          subtitle={`${pendingUnitsCount} units pending for ${monthName}`}
+          subtitle={
+            totalSocietyOutstanding > 0
+              ? `${pendingUnitsCount} units pending • ${formatCurrency(totalSocietyOutstanding)} total outstanding`
+              : `${pendingUnitsCount} units pending for ${monthName}`
+          }
           icon={Clock}
           color={totalPendingMaintenance > 0 ? 'amber' : 'slate'}
           loading={loading}

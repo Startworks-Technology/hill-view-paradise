@@ -48,9 +48,9 @@ const ResidentDetailsModal = ({
           </div>
         </div>
 
-        {/* Property & Maintenance Metrics */}
-        <div className="grid grid-cols-2 gap-3">
-          <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-100">
+        {/* Property & Maintenance & Outstanding Metrics */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
             <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
               Property Type
             </span>
@@ -58,7 +58,7 @@ const ResidentDetailsModal = ({
               {isPlot ? (
                 <>
                   <Layers className="w-4 h-4 mr-1 text-amber-600" />
-                  Plot ({resident.plotSize ? `${resident.plotSize} sq. yd` : '—'})
+                  Plot
                 </>
               ) : (
                 <>
@@ -69,13 +69,32 @@ const ResidentDetailsModal = ({
             </p>
           </div>
 
-          <div className="bg-emerald-50/60 p-3.5 rounded-xl border border-emerald-100">
+          <div className="bg-emerald-50/60 p-3 rounded-xl border border-emerald-100">
             <span className="text-[11px] font-semibold text-emerald-700 uppercase tracking-wider block">
-              Monthly Maintenance
+              Monthly Fee
             </span>
             <p className="text-sm font-extrabold text-emerald-700 mt-1 flex items-center">
               <Calculator className="w-4 h-4 mr-1 text-emerald-600" />
-              {formatCurrency(maintenance)} /mo
+              {formatCurrency(maintenance)}
+            </p>
+          </div>
+
+          <div className={`p-3 rounded-xl border ${
+            (Number(resident.outstandingBalance) || 0) > 0
+              ? 'bg-rose-50/60 border-rose-100 text-rose-700'
+              : (Number(resident.outstandingBalance) || 0) < 0
+              ? 'bg-blue-50/60 border-blue-100 text-blue-700'
+              : 'bg-slate-50 border-slate-100 text-emerald-700'
+          }`}>
+            <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
+              Outstanding
+            </span>
+            <p className="text-sm font-extrabold mt-1">
+              {(Number(resident.outstandingBalance) || 0) > 0
+                ? `${formatCurrency(resident.outstandingBalance)} (Due)`
+                : (Number(resident.outstandingBalance) || 0) < 0
+                ? `${formatCurrency(Math.abs(resident.outstandingBalance))} (Credit)`
+                : '₹0 (Clear)'}
             </p>
           </div>
         </div>

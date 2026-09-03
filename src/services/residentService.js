@@ -23,6 +23,7 @@ import {
   updateDoc,
   deleteDoc,
   serverTimestamp,
+  increment,
 } from '../firebase/firestore';
 import { VILLA_MAINTENANCE_RATE, PLOT_RATE_PER_SQYD } from '../utils/constants';
 
@@ -99,6 +100,8 @@ export const getResidents = async () => {
           propertyType: propertyType,
           plotSize: Number(data.plotSize) || 0,
           monthlyMaintenance: Number(data.monthlyMaintenance) || calculateMaintenance(propertyType, data.plotSize),
+          outstandingBalance: Number(data.outstandingBalance) || 0,
+          lastBilledMonthYear: data.lastBilledMonthYear || '',
         };
       });
     } catch (error) {
@@ -119,6 +122,8 @@ export const getResidents = async () => {
         propertyType: propertyType,
         plotSize: Number(r.plotSize) || 0,
         monthlyMaintenance: Number(r.monthlyMaintenance) || calculateMaintenance(propertyType, r.plotSize),
+        outstandingBalance: Number(r.outstandingBalance) || 0,
+        lastBilledMonthYear: r.lastBilledMonthYear || '',
       };
     })
     .sort((a, b) => (a.residentName || '').localeCompare(b.residentName || ''));
@@ -148,6 +153,8 @@ export const getResidentById = async (residentId) => {
           propertyType: propertyType,
           plotSize: Number(data.plotSize) || 0,
           monthlyMaintenance: Number(data.monthlyMaintenance) || calculateMaintenance(propertyType, data.plotSize),
+          outstandingBalance: Number(data.outstandingBalance) || 0,
+          lastBilledMonthYear: data.lastBilledMonthYear || '',
         };
       }
     } catch (error) {
@@ -196,6 +203,8 @@ export const createResident = async (residentData) => {
     propertyType: propertyType,
     plotSize: plotSize,
     monthlyMaintenance: monthlyMaintenance,
+    outstandingBalance: Number(residentData.outstandingBalance) || 0,
+    lastBilledMonthYear: residentData.lastBilledMonthYear || '',
     phone: residentData.phone ? residentData.phone.trim() : '',
     email: residentData.email ? residentData.email.trim().toLowerCase() : '',
     createdAt: isFirebaseConfigured ? serverTimestamp() : new Date().toISOString(),
@@ -257,6 +266,11 @@ export const updateResident = async (residentId, updateData) => {
     }
   }
 
+  const existing = existingResidents.find((r) => r.id === residentId);
+  const outstandingBalance = updateData.outstandingBalance !== undefined
+    ? Number(updateData.outstandingBalance) || 0
+    : (existing?.outstandingBalance || 0);
+
   // Strictly scalar payload (ZERO ARRAYS)
   const payload = {
     villaNumber: unitIdentifier,
@@ -265,6 +279,8 @@ export const updateResident = async (residentId, updateData) => {
     propertyType: propertyType,
     plotSize: plotSize,
     monthlyMaintenance: monthlyMaintenance,
+    outstandingBalance: outstandingBalance,
+    lastBilledMonthYear: updateData.lastBilledMonthYear !== undefined ? updateData.lastBilledMonthYear : (existing?.lastBilledMonthYear || ''),
     phone: updateData.phone ? updateData.phone.trim() : '',
     email: updateData.email ? updateData.email.trim().toLowerCase() : '',
     updatedAt: isFirebaseConfigured ? serverTimestamp() : new Date().toISOString(),
@@ -296,6 +312,82 @@ export const updateResident = async (residentId, updateData) => {
   };
   saveLocalResidents(localList);
   return localList[index];
+};
+
+/**
+ * Adjust a resident's outstanding balance atomically by a positive or negative amount.
+ * @param {string} residentId - Resident Document ID
+ * @param {number} deltaAmount - Amount to add (+ positive for unpaid/reversal, - negative for payment)
+ */
+export const adjustResidentOutstanding = async (residentId, deltaAmount) => {
+  if (!residentId || !deltaAmount || isNaN(deltaAmount)) return;
+
+  const numDelta = Math.round(Number(deltaAmount) * 100) / 100;
+  if (numDelta === 0) return;
+
+  if (isFirebaseConfigured && db) {
+    try {
+      const docRef = doc(db, COLLECTION_NAME, residentId);
+      await updateDoc(docRef, {
+        outstandingBalance: increment(numDelta),
+        updatedAt: serverTimestamp(),
+      });
+      return;
+    } catch (error) {
+      console.warn('Firestore adjustResidentOutstanding error (falling back to local storage):', error);
+    }
+  }
+
+  // Local storage mode
+  const localList = getLocalResidents();
+  const index = localList.findIndex((r) => r.id === residentId);
+  if (index !== -1) {
+    const current = Number(localList[index].outstandingBalance) || 0;
+    localList[index].outstandingBalance = Math.round((current + numDelta) * 100) / 100;
+    saveLocalResidents(localList);
+  }
+};
+
+/**
+ * Batch rollover unpaid maintenance for an active month to resident outstanding balances.
+ * @param {number} month - Month (1-12)
+ * @param {number} year - Year (e.g. 2026)
+ * @param {Array<object>} collectionsList - List of collection documents for this month
+ * @returns {Promise<{ billedCount: number, totalBilled: number, monthKey: string }>}
+ */
+export const rolloverUnpaidMonth = async (month, year, collectionsList = []) => {
+  const numMonth = Number(month);
+  const numYear = Number(year);
+  const monthKey = `${numYear}-${String(numMonth).padStart(2, '0')}`;
+
+  const residents = await getResidents();
+  const paidResidentIds = new Set(
+    collectionsList
+      .filter((c) => Number(c.month) === numMonth && Number(c.year) === numYear && c.status === 'Paid')
+      .map((c) => c.residentId)
+  );
+
+  let billedCount = 0;
+  let totalBilled = 0;
+
+  for (const resident of residents) {
+    // If unpaid and not already billed for this exact month
+    if (!paidResidentIds.has(resident.id) && resident.lastBilledMonthYear !== monthKey) {
+      const fee = Number(resident.monthlyMaintenance) || calculateMaintenance(resident.propertyType, resident.plotSize);
+      const newBalance = Math.round(((Number(resident.outstandingBalance) || 0) + fee) * 100) / 100;
+
+      await updateResident(resident.id, {
+        ...resident,
+        outstandingBalance: newBalance,
+        lastBilledMonthYear: monthKey,
+      });
+
+      billedCount += 1;
+      totalBilled += fee;
+    }
+  }
+
+  return { billedCount, totalBilled, monthKey };
 };
 
 /**

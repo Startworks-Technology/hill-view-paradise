@@ -16,9 +16,6 @@ import {
   Users,
   Plus,
   Search,
-  Sparkles,
-  Home,
-  Layers,
   LayoutGrid,
   Table as TableIcon,
 } from 'lucide-react';
@@ -39,11 +36,10 @@ import {
   updateResident,
   deleteResident,
 } from '../services/residentService';
-import { seedSampleData } from '../services/seedService';
 import { PROPERTY_TYPES } from '../utils/constants';
 
 const Residents = () => {
-  const { isAuthenticated } = useAuth();
+  const { isAdmin } = useAuth();
 
   const [residents, setResidents] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -101,7 +97,7 @@ const Residents = () => {
 
   // Handle Add/Edit form submission
   const handleFormSubmit = async (formData) => {
-    if (!isAuthenticated) return;
+    if (!isAdmin) return;
 
     try {
       setActionLoading(true);
@@ -124,7 +120,7 @@ const Residents = () => {
 
   // Handle Delete confirmation
   const handleDeleteConfirm = async () => {
-    if (!isAuthenticated) return;
+    if (!isAdmin) return;
     if (!selectedResidentForDelete) return;
 
     try {
@@ -140,22 +136,6 @@ const Residents = () => {
       await fetchResidentsList();
     } catch (error) {
       setToast({ type: 'error', message: error.message || 'Failed to delete property.' });
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  // Handle Seed Sample dataset
-  const handleSeed = async () => {
-    if (!isAuthenticated) return;
-
-    try {
-      setActionLoading(true);
-      const res = await seedSampleData();
-      setToast({ type: res.success ? 'success' : 'info', message: res.message });
-      await fetchResidentsList();
-    } catch (error) {
-      setToast({ type: 'error', message: 'Failed to seed sample dataset.' });
     } finally {
       setActionLoading(false);
     }
@@ -188,19 +168,8 @@ const Residents = () => {
         </div>
 
         {/* Action buttons (Only rendered when Admin is logged in) */}
-        {isAuthenticated && (
+        {isAdmin && (
           <div className="flex items-center space-x-3">
-            {residents.length === 0 && (
-              <Button
-                variant="outline"
-                size="sm"
-                icon={Sparkles}
-                onClick={handleSeed}
-                loading={actionLoading}
-              >
-                Seed Sample Data
-              </Button>
-            )}
             <Button
               variant="primary"
               icon={Plus}
@@ -275,9 +244,9 @@ const Residents = () => {
         <EmptyState
           icon={Users}
           title="No properties found"
-          description={isAuthenticated ? "Add your first Villa or Plot to get started." : "No property records registered yet."}
-          actionLabel={isAuthenticated ? "+ Add Property" : null}
-          onAction={isAuthenticated ? () => {
+          description={isAdmin ? "Add your first Villa or Plot to get started." : "No property records registered yet."}
+          actionLabel={isAdmin ? "+ Add Property" : null}
+          onAction={isAdmin ? () => {
             setSelectedResidentForEdit(null);
             setIsFormOpen(true);
           } : null}
@@ -301,7 +270,7 @@ const Residents = () => {
       ) : (
         <ResidentTable
           residents={filteredResidents}
-          isAuthenticated={isAuthenticated}
+          isAuthenticated={isAdmin}
           viewMode={viewMode}
           onView={(resident) => {
             setSelectedResidentForDetails(resident);
@@ -338,7 +307,7 @@ const Residents = () => {
           setSelectedResidentForDetails(null);
         }}
         resident={selectedResidentForDetails}
-        onEdit={isAuthenticated ? (resident) => {
+        onEdit={isAdmin ? (resident) => {
           setSelectedResidentForEdit(resident);
           setIsFormOpen(true);
         } : null}

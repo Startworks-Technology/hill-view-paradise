@@ -129,10 +129,8 @@ const ExpenseFormModal = ({
 
           <Input
             label="Amount (₹)"
-            type="number"
-            min="0"
-            step="10"
-            placeholder="5200"
+            inputMode="decimal"
+            placeholder="e.g. 5200.50"
             value={formData.amount}
             onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
             error={errors.amount}
