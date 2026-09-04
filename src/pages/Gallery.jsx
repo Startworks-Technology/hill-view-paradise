@@ -1,15 +1,14 @@
 /**
  * ==============================================================================
  * File: src/pages/Gallery.jsx
- * Description: Month-Based Society Media Gallery (Google Shared Drive + Firebase)
+ * Description: Month-Based Society Media Gallery (Google Drive + Firebase)
  * 
  * Features:
  * 1. Month & Year filter (`MonthYearPicker`) for browsing monthly event archives.
- * 2. Shared Drive Link bar: Direct access to the monthly Google Shared Drive folder.
- * 3. KPI Analytics: Total Media, Photos, Videos, Albums count.
- * 4. Filters & Search: Media Type (All / Photos / Videos), Album selector, text search.
- * 5. Fullscreen Lightbox & Google Drive video player.
- * 6. Direct Drive file upload & Drive share link management.
+ * 2. KPI Analytics: Total Media, Photos, Videos, Albums count.
+ * 3. Filters & Search: Media Type (All / Photos / Videos), Album selector, text search.
+ * 4. Fullscreen Lightbox & Google Drive video player.
+ * 5. Automated Google Drive Month-Wise upload and Firebase sync.
  * ==============================================================================
  */
 
@@ -18,11 +17,8 @@ import {
   Images,
   Image as ImageIcon,
   Play,
-  Folder,
   Plus,
   Search,
-  ExternalLink,
-  FolderPlus,
 } from 'lucide-react';
 import Button from '../components/common/Button';
 import Input from '../components/common/Input';
@@ -35,7 +31,6 @@ import ConfirmModal from '../components/common/ConfirmModal';
 
 import GalleryCard from '../components/gallery/GalleryCard';
 import GalleryFormModal from '../components/gallery/GalleryFormModal';
-import GalleryDriveFolderModal from '../components/gallery/GalleryDriveFolderModal';
 import GalleryLightboxModal from '../components/gallery/GalleryLightboxModal';
 
 import { useAuth } from '../hooks/useAuth';
@@ -44,21 +39,21 @@ import {
   createMediaItem,
   updateMediaItem,
   deleteMediaItem,
-  getMonthlyDriveFolder,
-  setMonthlyDriveFolder,
 } from '../services/galleryService';
 import { getMonthName } from '../utils/dateUtils';
-import { getDriveFolderUrl } from '../utils/driveUtils';
+import {
+  getGoogleAccessToken,
+  deleteFileFromGoogleDrive,
+} from '../services/googleDriveService';
 
 const Gallery = () => {
-  const { isAdmin } = useAuth();
+  const { isAdmin, canManageMedia } = useAuth();
 
   const currentDate = new Date();
   const [selectedMonth, setSelectedMonth] = useState(currentDate.getMonth() + 1);
   const [selectedYear, setSelectedYear] = useState(currentDate.getFullYear());
 
   const [mediaItems, setMediaItems] = useState([]);
-  const [driveFolder, setDriveFolder] = useState(null);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState(null);
 
@@ -71,8 +66,6 @@ const Gallery = () => {
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [selectedItemForEdit, setSelectedItemForEdit] = useState(null);
 
-  const [isFolderModalOpen, setIsFolderModalOpen] = useState(false);
-
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const [selectedItemForDelete, setSelectedItemForDelete] = useState(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
@@ -81,16 +74,12 @@ const Gallery = () => {
   const [isLightboxOpen, setIsLightboxOpen] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState(0);
 
-  // Load monthly media and folder details
+  // Load monthly media
   const fetchGalleryData = async () => {
     try {
       setLoading(true);
-      const [items, folder] = await Promise.all([
-        getMediaByMonth(selectedMonth, selectedYear),
-        getMonthlyDriveFolder(selectedMonth, selectedYear),
-      ]);
+      const items = await getMediaByMonth(selectedMonth, selectedYear);
       setMediaItems(items);
-      setDriveFolder(folder);
     } catch (error) {
       console.error('Failed to load gallery:', error);
       setToast({ type: 'error', message: 'Unable to load media for the selected month.' });
@@ -135,8 +124,21 @@ const Gallery = () => {
   }, [mediaItems, typeFilter, albumFilter, searchTerm]);
 
   // Summary Metrics
-  const totalPhotos = mediaItems.filter((m) => m.mediaType === 'image').length;
-  const totalVideos = mediaItems.filter((m) => m.mediaType === 'video').length;
+  const totalPhotos = mediaItems.reduce((acc, m) => {
+    if (m.mediaFiles?.length) {
+      return acc + m.mediaFiles.filter((f) => f.mediaType === 'image').length;
+    }
+    return acc + (m.mediaType === 'image' ? 1 : 0);
+  }, 0);
+
+  const totalVideos = mediaItems.reduce((acc, m) => {
+    if (m.mediaFiles?.length) {
+      return acc + m.mediaFiles.filter((f) => f.mediaType === 'video').length;
+    }
+    return acc + (m.mediaType === 'video' ? 1 : 0);
+  }, 0);
+
+  const totalAlbumsCount = uniqueAlbums.length;
 
   // Handlers
   const handleCreateOrUpdateMedia = async (mediaData) => {
@@ -148,40 +150,53 @@ const Gallery = () => {
       setToast({ type: 'success', message: 'Media details updated successfully.' });
     } else {
       const created = await createMediaItem(mediaData);
-      // If added for the active month, update local list
       if (
         Number(mediaData.month) === Number(selectedMonth) &&
         Number(mediaData.year) === Number(selectedYear)
       ) {
         setMediaItems((prev) => [created, ...prev]);
       }
-      setToast({ type: 'success', message: 'Photo / Video added to gallery!' });
+      setToast({ type: 'success', message: 'Photo / Video saved to gallery!' });
     }
-  };
-
-  const handleSaveDriveFolder = async (folderData) => {
-    const saved = await setMonthlyDriveFolder(
-      selectedMonth,
-      selectedYear,
-      folderData.driveFolderUrl,
-      folderData.folderName
-    );
-    setDriveFolder(saved);
-    setToast({ type: 'success', message: 'Monthly Google Shared Drive folder linked!' });
   };
 
   const handleDeleteConfirm = async () => {
     if (!selectedItemForDelete) return;
     try {
       setDeleteLoading(true);
+
+      // 1. Delete from Google Drive if file IDs are present and client ID configured
+      const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+      if (googleClientId) {
+        const filesToDelete = selectedItemForDelete.mediaFiles?.length
+          ? selectedItemForDelete.mediaFiles
+          : [selectedItemForDelete];
+
+        try {
+          const accessToken = await getGoogleAccessToken(googleClientId);
+          for (const file of filesToDelete) {
+            const fId = file.driveFileId || file.id;
+            if (fId) {
+              await deleteFileFromGoogleDrive({
+                fileId: fId,
+                accessToken,
+              });
+            }
+          }
+        } catch (driveErr) {
+          console.warn('Could not delete files from Google Drive:', driveErr);
+        }
+      }
+
+      // 2. Delete record from Firebase Firestore
       await deleteMediaItem(selectedItemForDelete.id);
       setMediaItems((prev) => prev.filter((m) => m.id !== selectedItemForDelete.id));
-      setToast({ type: 'success', message: 'Media removed from gallery.' });
+      setToast({ type: 'success', message: 'Post and associated files removed from gallery.' });
       setIsDeleteOpen(false);
       setSelectedItemForDelete(null);
     } catch (err) {
       console.error('Delete media error:', err);
-      setToast({ type: 'error', message: 'Failed to delete media item.' });
+      setToast({ type: 'error', message: 'Failed to delete media post.' });
     } finally {
       setDeleteLoading(false);
     }
@@ -196,9 +211,6 @@ const Gallery = () => {
   };
 
   const monthName = getMonthName(selectedMonth);
-  const sharedDriveUrl = driveFolder?.driveFolderUrl
-    ? getDriveFolderUrl(driveFolder.driveFolderUrl)
-    : null;
 
   return (
     <div className="space-y-6">
@@ -221,7 +233,7 @@ const Gallery = () => {
             <span>Society Media Gallery</span>
           </h1>
           <p className="text-xs sm:text-sm text-slate-500 mt-1">
-            Month-wise photo & video archives powered by Google Shared Drive
+            Month-wise photo & video archives for Hill View Paradise
           </p>
         </div>
 
@@ -236,7 +248,7 @@ const Gallery = () => {
             }}
           />
 
-          {isAdmin && (
+          {canManageMedia && (
             <Button
               variant="primary"
               icon={Plus}
@@ -247,57 +259,6 @@ const Gallery = () => {
             >
               Add Media
             </Button>
-          )}
-        </div>
-      </div>
-
-      {/* Google Shared Drive Status & Quick Access Banner */}
-      <div className="p-4 rounded-2xl bg-gradient-to-r from-emerald-900 via-slate-900 to-slate-900 text-white shadow-lg border border-emerald-500/20 flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div className="flex items-start space-x-3.5">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-            <Folder className="w-5 h-5" />
-          </div>
-          <div>
-            <div className="flex items-center space-x-2">
-              <h3 className="text-sm font-bold text-white">
-                {driveFolder?.folderName || `${monthName} ${selectedYear} Shared Drive Folder`}
-              </h3>
-              {sharedDriveUrl && (
-                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                  Linked
-                </span>
-              )}
-            </div>
-            <p className="text-xs text-slate-300 mt-0.5">
-              {sharedDriveUrl
-                ? 'Directly browse all raw original high-resolution photos and videos in Google Shared Drive.'
-                : 'No Google Shared Drive folder attached for this month yet.'}
-            </p>
-          </div>
-        </div>
-
-        <div className="flex items-center space-x-2 shrink-0">
-          {sharedDriveUrl && (
-            <a
-              href={sharedDriveUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center space-x-2 px-3.5 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow-md shadow-emerald-600/30 transition-all"
-            >
-              <ExternalLink className="w-4 h-4" />
-              <span>Open Shared Drive</span>
-            </a>
-          )}
-
-          {isAdmin && (
-            <button
-              type="button"
-              onClick={() => setIsFolderModalOpen(true)}
-              className="inline-flex items-center space-x-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-slate-800/80 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700 transition-colors"
-            >
-              <FolderPlus className="w-4 h-4 text-emerald-400" />
-              <span>{sharedDriveUrl ? 'Edit Folder Link' : 'Link Drive Folder'}</span>
-            </button>
           )}
         </div>
       </div>
@@ -392,7 +353,7 @@ const Gallery = () => {
             <GalleryCard
               key={item.id}
               item={item}
-              isAdmin={isAdmin}
+              isAdmin={canManageMedia}
               onView={handleViewMedia}
               onEdit={(it) => {
                 setSelectedItemForEdit(it);
@@ -413,11 +374,11 @@ const Gallery = () => {
           description={
             searchTerm || typeFilter !== 'all' || albumFilter !== 'all'
               ? 'No photos or videos match your selected search or filter criteria.'
-              : 'Start building this month\'s gallery by uploading photos and videos or pasting Google Shared Drive links.'
+              : 'Start building this month\'s gallery by uploading photos and videos to Google Drive.'
           }
-          actionLabel={isAdmin ? 'Add First Photo / Video' : undefined}
+          actionLabel={canManageMedia ? 'Add First Photo / Video' : undefined}
           onAction={
-            isAdmin
+            canManageMedia
               ? () => {
                   setSelectedItemForEdit(null);
                   setIsFormOpen(true);
@@ -433,6 +394,7 @@ const Gallery = () => {
         onClose={() => setIsLightboxOpen(false)}
         items={filteredMedia}
         currentIndex={lightboxIndex}
+        isAdmin={canManageMedia}
         onIndexChange={(idx) => setLightboxIndex(idx)}
         onCopySuccess={(msg) => setToast({ type: 'success', message: msg })}
       />
@@ -448,17 +410,6 @@ const Gallery = () => {
         initialData={selectedItemForEdit}
         activeMonth={selectedMonth}
         activeYear={selectedYear}
-        sharedDriveFolderId={driveFolder?.folderId}
-      />
-
-      {/* Monthly Drive Folder Settings Modal */}
-      <GalleryDriveFolderModal
-        isOpen={isFolderModalOpen}
-        onClose={() => setIsFolderModalOpen(false)}
-        onSave={handleSaveDriveFolder}
-        month={selectedMonth}
-        year={selectedYear}
-        initialFolder={driveFolder}
       />
 
       {/* Delete Confirmation Modal */}
@@ -470,7 +421,7 @@ const Gallery = () => {
         }}
         onConfirm={handleDeleteConfirm}
         title="Delete Media Item"
-        message={`Are you sure you want to remove "${selectedItemForDelete?.title}" from the gallery? This will remove the link from the portal.`}
+        message={`Are you sure you want to remove "${selectedItemForDelete?.title}" from the gallery?`}
         confirmText="Delete Media"
         confirmVariant="danger"
         loading={deleteLoading}

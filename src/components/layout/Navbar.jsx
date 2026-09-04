@@ -18,7 +18,7 @@ import { Menu, ShieldCheck, LogOut, Building2 } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
 
 const Navbar = ({ onMenuClick }) => {
-  const { logout } = useAuth();
+  const { logout, currentUser } = useAuth();
   const navigate = useNavigate();
 
   const handleLogout = async () => {
@@ -55,10 +55,32 @@ const Navbar = ({ onMenuClick }) => {
         {/* Right: Authenticated Admin Actions & Status */}
         <div className="flex items-center space-x-2 sm:space-x-3 ml-auto shrink-0">
           <div className="flex items-center space-x-2">
-            <div className="inline-flex items-center px-2 py-1 sm:px-2.5 sm:py-1 rounded-full text-[11px] sm:text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 shrink-0">
-              <ShieldCheck className="w-3 h-3 sm:w-3.5 sm:h-3.5 mr-1 text-emerald-600" />
-              <span className="hidden sm:inline">Admin Active</span>
-              <span className="sm:hidden">Admin</span>
+            <div className={`inline-flex items-center px-2 py-1 sm:px-2.5 sm:py-1 rounded-full text-[11px] sm:text-xs font-semibold shrink-0 ${
+              currentUser?.role === 'admin'
+                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                : currentUser?.role === 'media'
+                ? 'bg-purple-50 text-purple-700 border border-purple-200'
+                : 'bg-sky-50 text-sky-700 border border-sky-200'
+            }`}>
+              <ShieldCheck className={`w-3 h-3 sm:w-3.5 sm:h-3.5 mr-1 ${
+                currentUser?.role === 'admin'
+                  ? 'text-emerald-600'
+                  : currentUser?.role === 'media'
+                  ? 'text-purple-600'
+                  : 'text-sky-600'
+              }`} />
+              <span className="hidden sm:inline">
+                {currentUser?.displayName || (
+                  currentUser?.role === 'admin'
+                    ? 'Society Administrator'
+                    : currentUser?.role === 'media'
+                    ? 'Media Manager'
+                    : 'Society Resident'
+                )}
+              </span>
+              <span className="sm:hidden">
+                {currentUser?.role === 'admin' ? 'Admin' : currentUser?.role === 'media' ? 'Media' : 'Resident'}
+              </span>
             </div>
 
             <button

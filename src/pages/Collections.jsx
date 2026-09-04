@@ -19,7 +19,9 @@ import {
   Wallet,
   Plus,
   Search,
-  ArrowRightLeft,
+  CalendarPlus,
+  CalendarCheck,
+  History,
 } from 'lucide-react';
 import Button from '../components/common/Button';
 import Input from '../components/common/Input';
@@ -28,6 +30,7 @@ import MonthYearPicker from '../components/common/MonthYearPicker';
 import CollectionSummaryCards from '../components/collections/CollectionSummaryCards';
 import CollectionTable from '../components/collections/CollectionTable';
 import CollectionFormModal from '../components/collections/CollectionFormModal';
+import BillingLogsModal from '../components/collections/BillingLogsModal';
 import ConfirmModal from '../components/common/ConfirmModal';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import EmptyState from '../components/common/EmptyState';
@@ -39,7 +42,8 @@ import {
   updateCollection,
   deleteCollection,
 } from '../services/collectionService';
-import { getResidents, rolloverUnpaidMonth } from '../services/residentService';
+import { getResidents, generateMonthlyDues } from '../services/residentService';
+import { getBillingLogByMonth } from '../services/billingLogService';
 import { COLLECTION_STATUSES } from '../utils/constants';
 import { getMonthName } from '../utils/dateUtils';
 import { formatCurrency } from '../utils/currencyUtils';
@@ -53,6 +57,7 @@ const Collections = () => {
 
   const [collections, setCollections] = useState([]);
   const [residents, setResidents] = useState([]);
+  const [billingLog, setBillingLog] = useState(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [toast, setToast] = useState(null);
@@ -68,20 +73,23 @@ const Collections = () => {
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const [selectedCollectionForDelete, setSelectedCollectionForDelete] = useState(null);
 
-  const [isRolloverOpen, setIsRolloverOpen] = useState(false);
+  const [isGenerateDuesOpen, setIsGenerateDuesOpen] = useState(false);
+  const [isBillingLogsOpen, setIsBillingLogsOpen] = useState(false);
 
-  // Fetch collections and residents concurrently for the active month & year
+  // Fetch collections, residents, and billing log concurrently for the active month & year
   const fetchData = async () => {
     try {
       setLoading(true);
-      const [cols, resList] = await Promise.all([
+      const [cols, resList, bLog] = await Promise.all([
         getCollectionsByMonth(selectedMonth, selectedYear),
         getResidents(),
+        getBillingLogByMonth(selectedMonth, selectedYear),
       ]);
       setCollections(cols);
       setResidents(resList);
+      setBillingLog(bLog);
     } catch (error) {
-      console.error('Error loading collections:', error);
+      console.error('Error loading collections data:', error);
       setToast({ type: 'error', message: 'Unable to load collections for the selected month.' });
     } finally {
       setLoading(false);
@@ -93,10 +101,9 @@ const Collections = () => {
   }, [selectedMonth, selectedYear]);
 
   // Dynamic Financial Analytics:
-  // Total Expected = Sum of each Villa (₹3,000) and Plot (Plot Size * ₹3)
+  // Total Expected = Sum of stored monthlyMaintenance for all active residents
   const totalExpected = residents.reduce((sum, r) => {
-    const rate = Number(r.monthlyMaintenance) || (r.propertyType === 'Plot' ? (Number(r.plotSize) || 0) * 3 : 3000);
-    return sum + rate;
+    return sum + (Number(r.monthlyMaintenance) || 0);
   }, 0);
 
   const paidCollections = collections.filter((c) => c.status === 'Paid');
@@ -106,28 +113,34 @@ const Collections = () => {
   const paidCount = paidCollections.length;
   const pendingCount = Math.max(0, residents.length - paidCount);
 
-  // Handle Rollover Confirm
-  const handleRolloverConfirm = async () => {
+  // Month-start dues status derived from billing_logs table and resident billing state
+  const monthKey = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}`;
+  const unbilledResidents = residents.filter((r) => r.lastBilledMonthYear !== monthKey);
+  const unbilledCount = unbilledResidents.length;
+  const isMonthBilled = Boolean(billingLog && billingLog.status === 'Completed' && unbilledCount === 0);
+
+  // Handle Month-Start Dues Generation
+  const handleGenerateDuesConfirm = async () => {
     if (!isAdmin) return;
 
     try {
       setActionLoading(true);
-      const res = await rolloverUnpaidMonth(selectedMonth, selectedYear, collections);
+      const res = await generateMonthlyDues(selectedMonth, selectedYear, 'Manual (Admin)', true);
       if (res.billedCount > 0) {
         setToast({
           type: 'success',
-          message: `Added ${formatCurrency(res.totalBilled)} across ${res.billedCount} unpaid properties to their outstanding balance for ${monthName} ${selectedYear}.`,
+          message: `Generated dues of ${formatCurrency(res.totalBilled)} across ${res.billedCount} properties for ${monthName} ${selectedYear}.`,
         });
       } else {
         setToast({
           type: 'info',
-          message: `No new unpaid properties found or all have already been billed for ${monthName} ${selectedYear}.`,
+          message: `All properties have already been billed for ${monthName} ${selectedYear}.`,
         });
       }
-      setIsRolloverOpen(false);
+      setIsGenerateDuesOpen(false);
       await fetchData();
     } catch (error) {
-      setToast({ type: 'error', message: error.message || 'Failed to roll over unpaid dues.' });
+      setToast({ type: 'error', message: error.message || 'Failed to generate monthly dues.' });
     } finally {
       setActionLoading(false);
     }
@@ -232,15 +245,33 @@ const Collections = () => {
           {/* Admin Actions */}
           {isAdmin && (
             <>
-              {pendingCount > 0 && (
+              <Button
+                variant="ghost"
+                icon={History}
+                onClick={() => setIsBillingLogsOpen(true)}
+                title="View monthly dues billing audit logs"
+              >
+                Billing Logs
+              </Button>
+              {unbilledCount > 0 ? (
                 <Button
                   variant="secondary"
-                  icon={ArrowRightLeft}
-                  onClick={() => setIsRolloverOpen(true)}
-                  title="Roll over unpaid maintenance to resident outstanding balances"
+                  icon={CalendarPlus}
+                  onClick={() => setIsGenerateDuesOpen(true)}
+                  title={`Generate monthly maintenance dues for ${monthName} ${selectedYear}`}
                 >
-                  Roll Over Unpaid ({pendingCount})
+                  Generate Dues ({unbilledCount})
                 </Button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setIsBillingLogsOpen(true)}
+                  className="hidden sm:inline-flex items-center px-3 py-2 rounded-lg text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 transition-colors cursor-pointer"
+                  title="Click to view billing audit details"
+                >
+                  <CalendarCheck className="w-3.5 h-3.5 mr-1.5 text-emerald-600" />
+                  {monthName} Dues Billed ({formatCurrency(billingLog?.totalBilledAmount || totalExpected)})
+                </button>
               )}
               <Button
                 variant="primary"
@@ -364,16 +395,22 @@ const Collections = () => {
         loading={actionLoading}
       />
 
-      {/* Roll Over Unpaid Dues Confirmation Modal */}
+      {/* Generate Monthly Dues Confirmation Modal */}
       <ConfirmModal
-        isOpen={isRolloverOpen}
-        onClose={() => setIsRolloverOpen(false)}
-        onConfirm={handleRolloverConfirm}
-        title={`Roll Over Unpaid Dues for ${monthName} ${selectedYear}?`}
-        message={`This will add the monthly maintenance fee for all ${pendingCount} unpaid properties to their stored Outstanding Balance. Units that have already been billed for this month will be skipped automatically.`}
-        confirmText="Apply to Outstanding"
+        isOpen={isGenerateDuesOpen}
+        onClose={() => setIsGenerateDuesOpen(false)}
+        onConfirm={handleGenerateDuesConfirm}
+        title={`Generate Monthly Dues for ${monthName} ${selectedYear}?`}
+        message={`This will apply the monthly maintenance fee to all ${unbilledCount} unbilled properties for ${monthName} ${selectedYear}, adding it to each resident's balance as due. Properties already billed for this month will be skipped.`}
+        confirmText="Generate Dues"
         confirmVariant="primary"
         loading={actionLoading}
+      />
+
+      {/* Monthly Dues Billing Audit Logs Modal */}
+      <BillingLogsModal
+        isOpen={isBillingLogsOpen}
+        onClose={() => setIsBillingLogsOpen(false)}
       />
     </div>
   );

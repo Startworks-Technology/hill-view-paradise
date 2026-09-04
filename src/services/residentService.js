@@ -22,10 +22,12 @@ import {
   addDoc,
   updateDoc,
   deleteDoc,
+  writeBatch,
   serverTimestamp,
   increment,
 } from '../firebase/firestore';
 import { VILLA_MAINTENANCE_RATE, PLOT_RATE_PER_SQYD } from '../utils/constants';
+import { getBillingLogByMonth, createBillingLog } from './billingLogService';
 
 // Firestore collection name
 const COLLECTION_NAME = 'residents';
@@ -349,45 +351,85 @@ export const adjustResidentOutstanding = async (residentId, deltaAmount) => {
 };
 
 /**
- * Batch rollover unpaid maintenance for an active month to resident outstanding balances.
+ * Generate monthly maintenance dues for all active properties for the specified month/year.
+ * Adds the monthly fee to each resident's outstanding balance once per month and logs the transaction.
  * @param {number} month - Month (1-12)
  * @param {number} year - Year (e.g. 2026)
- * @param {Array<object>} collectionsList - List of collection documents for this month
- * @returns {Promise<{ billedCount: number, totalBilled: number, monthKey: string }>}
+ * @param {string} triggeredBy - Trigger source ('Auto-Scheduler' | 'Manual (Admin)')
+ * @returns {Promise<{ billedCount: number, totalBilled: number, monthKey: string, log: object, alreadyBilled?: boolean }>}
  */
-export const rolloverUnpaidMonth = async (month, year, collectionsList = []) => {
+export const generateMonthlyDues = async (month, year, triggeredBy = 'Manual (Admin)', force = false) => {
   const numMonth = Number(month);
   const numYear = Number(year);
   const monthKey = `${numYear}-${String(numMonth).padStart(2, '0')}`;
 
-  const residents = await getResidents();
-  const paidResidentIds = new Set(
-    collectionsList
-      .filter((c) => Number(c.month) === numMonth && Number(c.year) === numYear && c.status === 'Paid')
-      .map((c) => c.residentId)
-  );
+  // Check if this month was already logged as completed in Firestore billing_logs
+  const existingLog = await getBillingLogByMonth(numMonth, numYear);
+  if (existingLog && existingLog.status === 'Completed' && !force) {
+    return {
+      alreadyBilled: true,
+      billedCount: existingLog.billedPropertiesCount || 0,
+      totalBilled: existingLog.totalBilledAmount || 0,
+      monthKey,
+      log: existingLog,
+    };
+  }
 
+  const residents = await getResidents();
   let billedCount = 0;
   let totalBilled = 0;
 
+  const batch = writeBatch(db);
+
   for (const resident of residents) {
-    // If unpaid and not already billed for this exact month
-    if (!paidResidentIds.has(resident.id) && resident.lastBilledMonthYear !== monthKey) {
-      const fee = Number(resident.monthlyMaintenance) || calculateMaintenance(resident.propertyType, resident.plotSize);
-      const newBalance = Math.round(((Number(resident.outstandingBalance) || 0) + fee) * 100) / 100;
+    const fee = Number(resident.monthlyMaintenance) || 0;
+    const currentBal = Number(resident.outstandingBalance) || 0;
+    const newBalance = Math.round((currentBal + fee) * 100) / 100;
 
-      await updateResident(resident.id, {
-        ...resident,
-        outstandingBalance: newBalance,
-        lastBilledMonthYear: monthKey,
-      });
+    const docRef = doc(db, COLLECTION_NAME, resident.id);
+    batch.update(docRef, {
+      outstandingBalance: newBalance,
+      lastBilledMonthYear: monthKey,
+      updatedAt: serverTimestamp(),
+    });
 
-      billedCount += 1;
-      totalBilled += fee;
-    }
+    billedCount += 1;
+    totalBilled += fee;
   }
 
-  return { billedCount, totalBilled, monthKey };
+  // Stage the billing log in the same atomic transaction in Cloud Firestore
+  const logId = `bill_${numYear}_${String(numMonth).padStart(2, '0')}`;
+  const logDocRef = doc(db, 'billing_logs', logId);
+  const logPayload = {
+    id: logId,
+    month: numMonth,
+    year: numYear,
+    monthKey,
+    billedDate: new Date().toISOString(),
+    billedPropertiesCount: billedCount,
+    totalBilledAmount: totalBilled,
+    status: 'Completed',
+    triggeredBy,
+    createdAt: serverTimestamp(),
+  };
+
+  batch.set(logDocRef, logPayload, { merge: true });
+  await batch.commit(); // Atomic commit directly to Cloud Firestore
+
+  return {
+    billedCount,
+    totalBilled,
+    monthKey,
+    log: logPayload,
+    alreadyBilled: false,
+  };
+};
+
+/**
+ * Backward compatibility alias for generateMonthlyDues
+ */
+export const rolloverUnpaidMonth = async (month, year) => {
+  return generateMonthlyDues(month, year, 'Manual (Admin)');
 };
 
 /**

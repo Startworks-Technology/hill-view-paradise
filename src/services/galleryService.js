@@ -83,6 +83,58 @@ const assertNoArrayFields = (obj) => {
 };
 
 /**
+ * Helper to parse media item and normalize mediaFiles.
+ * Ensures backward compatibility with legacy single-item posts.
+ * @param {object} rawItem
+ * @returns {object}
+ */
+export const normalizeMediaPost = (rawItem) => {
+  if (!rawItem) return null;
+
+  let parsedFiles = [];
+  if (rawItem.mediaFilesJson && typeof rawItem.mediaFilesJson === 'string') {
+    try {
+      parsedFiles = JSON.parse(rawItem.mediaFilesJson);
+    } catch (e) {
+      console.warn('Failed to parse mediaFilesJson:', e);
+    }
+  }
+
+  // If no parsed files, construct from legacy scalar fields
+  if (!parsedFiles || parsedFiles.length === 0) {
+    if (rawItem.driveLink || rawItem.driveFileId) {
+      parsedFiles = [
+        {
+          id: rawItem.driveFileId || 'file_0',
+          driveLink: rawItem.driveLink || '',
+          driveFileId: rawItem.driveFileId || '',
+          thumbnailUrl: rawItem.thumbnailUrl || (rawItem.driveFileId ? getDriveThumbnailUrl(rawItem.driveFileId) : rawItem.driveLink),
+          mediaType: rawItem.mediaType || 'image',
+          name: rawItem.title || 'Media file',
+          size: rawItem.fileSize || 0,
+        },
+      ];
+    }
+  }
+
+  const primaryFile = parsedFiles[0] || {};
+  const mediaCount = parsedFiles.length || 1;
+  const hasVideo = parsedFiles.some((f) => f.mediaType === 'video');
+
+  return {
+    ...rawItem,
+    mediaFiles: parsedFiles,
+    mediaCount,
+    hasVideo,
+    // Provide cover image / primary details
+    driveLink: rawItem.driveLink || primaryFile.driveLink || '',
+    driveFileId: rawItem.driveFileId || primaryFile.driveFileId || '',
+    thumbnailUrl: rawItem.thumbnailUrl || primaryFile.thumbnailUrl || '',
+    mediaType: rawItem.mediaType || (hasVideo ? 'video' : 'image'),
+  };
+};
+
+/**
  * Fetch gallery media items for a specific month and year.
  * @param {number} month - Month number (1-12)
  * @param {number} year - Four-digit year (e.g. 2026)
@@ -104,12 +156,13 @@ export const getMediaByMonth = async (month, year) => {
       const snapshot = await getDocs(q);
       const items = snapshot.docs.map((docSnap) => {
         const data = docSnap.data();
-        return {
+        const normalized = normalizeMediaPost({
           id: docSnap.id,
           ...data,
           createdAt: data.createdAt instanceof Timestamp ? data.createdAt.toDate().toISOString() : data.createdAt,
           updatedAt: data.updatedAt instanceof Timestamp ? data.updatedAt.toDate().toISOString() : data.updatedAt,
-        };
+        });
+        return normalized;
       });
 
       // Sort client-side by eventDate or createdAt descending
@@ -122,27 +175,44 @@ export const getMediaByMonth = async (month, year) => {
 
   // Fallback: Local storage simulation
   const localItems = getLocalGallery();
-  const filtered = localItems.filter(
-    (item) => Number(item.month) === numMonth && Number(item.year) === numYear
-  );
+  const filtered = localItems
+    .filter((item) => Number(item.month) === numMonth && Number(item.year) === numYear)
+    .map(normalizeMediaPost);
+
   filtered.sort((a, b) => new Date(b.eventDate || b.createdAt || 0) - new Date(a.eventDate || a.createdAt || 0));
   return filtered;
 };
 
 /**
- * Create a new gallery media record.
- * @param {object} itemData - Media item payload
+ * Create a new gallery media / post record with multiple files.
+ * @param {object} itemData - Media post payload
  * @returns {Promise<object>} Created media item with generated ID
  */
 export const createMediaItem = async (itemData) => {
-  const driveFileId = extractDriveId(itemData.driveLink);
-  const thumbnailUrl = itemData.thumbnailUrl || (driveFileId ? getDriveThumbnailUrl(driveFileId) : itemData.driveLink);
+  // Normalize media files array
+  const filesList = Array.isArray(itemData.mediaFiles) && itemData.mediaFiles.length > 0
+    ? itemData.mediaFiles
+    : [
+        {
+          id: itemData.driveFileId || `file_${Date.now()}`,
+          driveLink: itemData.driveLink || '',
+          driveFileId: itemData.driveFileId || extractDriveId(itemData.driveLink) || '',
+          thumbnailUrl: itemData.thumbnailUrl || (itemData.driveFileId ? getDriveThumbnailUrl(itemData.driveFileId) : itemData.driveLink),
+          mediaType: itemData.mediaType || 'image',
+          name: itemData.title || 'Media File',
+          size: Number(itemData.fileSize) || 0,
+        },
+      ];
+
+  const primaryFile = filesList[0] || {};
+  const driveFileId = primaryFile.driveFileId || extractDriveId(primaryFile.driveLink);
+  const thumbnailUrl = primaryFile.thumbnailUrl || (driveFileId ? getDriveThumbnailUrl(driveFileId) : primaryFile.driveLink);
 
   const payload = {
     title: itemData.title ? itemData.title.trim() : 'Untitled Media',
     description: itemData.description ? itemData.description.trim() : '',
-    mediaType: itemData.mediaType === 'video' ? 'video' : 'image',
-    driveLink: itemData.driveLink ? itemData.driveLink.trim() : '',
+    mediaType: itemData.mediaType || (filesList.some((f) => f.mediaType === 'video') ? 'video' : 'image'),
+    driveLink: primaryFile.driveLink || itemData.driveLink || '',
     driveFileId: driveFileId || '',
     thumbnailUrl: thumbnailUrl || '',
     album: itemData.album ? itemData.album.trim() : 'General',
@@ -150,6 +220,8 @@ export const createMediaItem = async (itemData) => {
     year: Number(itemData.year) || new Date().getFullYear(),
     eventDate: itemData.eventDate || new Date().toISOString().split('T')[0],
     fileSize: Number(itemData.fileSize) || 0,
+    mediaCount: filesList.length,
+    mediaFilesJson: JSON.stringify(filesList), // Scalar JSON string to satisfy strict no-array rule
     uploadedBy: itemData.uploadedBy || 'Administrator',
   };
 
@@ -164,12 +236,12 @@ export const createMediaItem = async (itemData) => {
         updatedAt: serverTimestamp(),
       });
 
-      return {
+      return normalizeMediaPost({
         id: docRef.id,
         ...payload,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
-      };
+      });
     } catch (error) {
       console.warn('Firestore createMediaItem failed, writing to local storage fallback:', error);
     }
@@ -186,11 +258,11 @@ export const createMediaItem = async (itemData) => {
 
   localItems.unshift(newItem);
   saveLocalGallery(localItems);
-  return newItem;
+  return normalizeMediaPost(newItem);
 };
 
 /**
- * Update an existing gallery media record.
+ * Update an existing gallery media post.
  * @param {string} id - Document ID
  * @param {object} updateData - Partial update payload
  * @returns {Promise<object>} Updated document
@@ -198,23 +270,29 @@ export const createMediaItem = async (itemData) => {
 export const updateMediaItem = async (id, updateData) => {
   if (!id) throw new Error('Cannot update media item without a valid ID.');
 
-  const driveFileId = updateData.driveLink !== undefined ? extractDriveId(updateData.driveLink) : undefined;
+  const payload = {};
 
-  const payload = {
-    ...(updateData.title !== undefined && { title: updateData.title.trim() }),
-    ...(updateData.description !== undefined && { description: updateData.description.trim() }),
-    ...(updateData.mediaType !== undefined && { mediaType: updateData.mediaType }),
-    ...(updateData.driveLink !== undefined && { driveLink: updateData.driveLink.trim() }),
-    ...(driveFileId !== undefined && { driveFileId: driveFileId || '' }),
-    ...(updateData.thumbnailUrl !== undefined && { thumbnailUrl: updateData.thumbnailUrl }),
-    ...(updateData.album !== undefined && { album: updateData.album.trim() }),
-    ...(updateData.month !== undefined && { month: Number(updateData.month) }),
-    ...(updateData.year !== undefined && { year: Number(updateData.year) }),
-    ...(updateData.eventDate !== undefined && { eventDate: updateData.eventDate }),
-  };
+  if (updateData.title !== undefined) payload.title = updateData.title.trim();
+  if (updateData.description !== undefined) payload.description = updateData.description.trim();
+  if (updateData.album !== undefined) payload.album = updateData.album.trim();
+  if (updateData.month !== undefined) payload.month = Number(updateData.month);
+  if (updateData.year !== undefined) payload.year = Number(updateData.year);
+  if (updateData.eventDate !== undefined) payload.eventDate = updateData.eventDate;
+  if (updateData.mediaType !== undefined) payload.mediaType = updateData.mediaType;
 
-  if (payload.driveLink && !payload.thumbnailUrl && driveFileId) {
-    payload.thumbnailUrl = getDriveThumbnailUrl(driveFileId);
+  if (Array.isArray(updateData.mediaFiles) && updateData.mediaFiles.length > 0) {
+    payload.mediaFilesJson = JSON.stringify(updateData.mediaFiles);
+    payload.mediaCount = updateData.mediaFiles.length;
+    const primary = updateData.mediaFiles[0];
+    if (primary) {
+      payload.driveLink = primary.driveLink || '';
+      payload.driveFileId = primary.driveFileId || '';
+      payload.thumbnailUrl = primary.thumbnailUrl || '';
+    }
+  } else if (updateData.driveLink !== undefined) {
+    payload.driveLink = updateData.driveLink.trim();
+    payload.driveFileId = extractDriveId(updateData.driveLink) || '';
+    payload.thumbnailUrl = payload.driveFileId ? getDriveThumbnailUrl(payload.driveFileId) : updateData.driveLink;
   }
 
   assertNoArrayFields(payload);
@@ -227,7 +305,7 @@ export const updateMediaItem = async (id, updateData) => {
         updatedAt: serverTimestamp(),
       });
 
-      return { id, ...payload, updatedAt: new Date().toISOString() };
+      return normalizeMediaPost({ id, ...payload, updatedAt: new Date().toISOString() });
     } catch (error) {
       console.warn('Firestore updateMediaItem failed, updating local storage:', error);
     }
@@ -243,7 +321,7 @@ export const updateMediaItem = async (id, updateData) => {
       updatedAt: new Date().toISOString(),
     };
     saveLocalGallery(localItems);
-    return localItems[index];
+    return normalizeMediaPost(localItems[index]);
   }
 
   throw new Error(`Media item with ID ${id} not found in local records.`);

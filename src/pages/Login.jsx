@@ -1,26 +1,25 @@
 /**
  * ==============================================================================
  * File: src/pages/Login.jsx
- * Description: Unified Sign-In Page (Admin & Residents)
+ * Description: Unified Sign-In Page (Email or Mobile Number)
  * 
  * Responsibilities:
- * 1. Collects email and password for both administrators and society residents.
+ * 1. Collects email or 10-digit mobile number and password.
  * 2. Authenticates through `AuthContext.login()`.
  * 3. Redirects authenticated user to dashboard or intended protected route.
- * 4. Provides quick-fill demo credentials for both Admin and Resident roles.
+ * 4. Provides clear validation feedback and responsive UX.
  * ==============================================================================
  */
 
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { Building2, Lock, Mail, ShieldAlert } from 'lucide-react';
+import { Building2, Lock, User, ShieldAlert } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import Input from '../components/common/Input';
 import Button from '../components/common/Button';
-import { DEFAULT_SOCIETY_CONFIG } from '../utils/constants';
 
 const Login = () => {
-  const [email, setEmail] = useState('');
+  const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -42,15 +41,16 @@ const Login = () => {
   // Handle Login Submission
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!email.trim() || !password) {
-      setError('Please provide both email and password.');
+    const cleanIdentifier = identifier.trim();
+    if (!cleanIdentifier || !password) {
+      setError('Please provide both email/mobile number and password.');
       return;
     }
 
     try {
       setLoading(true);
       setError(null);
-      await login(email.trim(), password);
+      await login(cleanIdentifier, password);
       navigate(from, { replace: true });
     } catch (err) {
       setError(err.message || 'Authentication failed. Please check your credentials.');
@@ -86,7 +86,7 @@ const Login = () => {
           <div className="mb-6 text-center">
             <h3 className="text-lg font-bold text-slate-900">Sign In to Your Account</h3>
             <p className="text-xs text-slate-500 mt-1">
-              Enter your credentials to access the society dashboard
+              Enter your email or mobile number to access the portal
             </p>
           </div>
 
@@ -99,14 +99,15 @@ const Login = () => {
             )}
 
             <Input
-              label="Email Address"
-              type="email"
-              icon={Mail}
-              placeholder="hvp@example.com"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              label="Email or Mobile Number"
+              type="text"
+              icon={User}
+              placeholder="name@example.com or mobile number"
+              value={identifier}
+              onChange={(e) => setIdentifier(e.target.value)}
               required
               disabled={loading}
+              autoComplete="username"
             />
 
             <Input
@@ -118,12 +119,13 @@ const Login = () => {
               onChange={(e) => setPassword(e.target.value)}
               required
               disabled={loading}
+              autoComplete="current-password"
             />
 
             <Button
               type="submit"
               variant="primary"
-              className="w-full py-2.5"
+              className="w-full py-2.5 cursor-pointer"
               loading={loading ? 'Signing in...' : false}
             >
               Sign In to Dashboard

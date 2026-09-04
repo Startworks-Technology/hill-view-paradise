@@ -171,7 +171,7 @@ const ResidentTable = ({
               <th scope="col" className="px-5 py-3.5">Type</th>
               <th scope="col" className="px-5 py-3.5">Plot Size</th>
               <th scope="col" className="px-5 py-3.5">Monthly Maintenance</th>
-              <th scope="col" className="px-5 py-3.5">Outstanding Balance</th>
+              <th scope="col" className="px-5 py-3.5">Due</th>
               <th scope="col" className="px-5 py-3.5">Contact</th>
               <th scope="col" className="px-5 py-3.5 text-right">Actions</th>
             </tr>

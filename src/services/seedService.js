@@ -14,6 +14,7 @@ import { createResident, getResidents } from './residentService';
 import { createCollection } from './collectionService';
 import { createExpense } from './expenseService';
 import { createMediaItem, setMonthlyDriveFolder } from './galleryService';
+import { seedDefaultUsers } from './userService';
 
 /**
  * Standard realistic property seed profiles for Hill View Paradise.
@@ -40,6 +41,9 @@ export const seedSampleData = async () => {
     if (existingResidents.length > 0) {
       return { success: false, message: 'Database already contains property records.' };
     }
+
+    // 0. Seed Users Collection
+    await seedDefaultUsers();
 
     // 1. Seed Villas & Plots
     const createdResidents = [];

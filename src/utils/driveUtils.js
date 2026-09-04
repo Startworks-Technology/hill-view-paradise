@@ -61,6 +61,8 @@ export const isGoogleDriveUrl = (url) => {
 
 /**
  * Generates a high-resolution direct thumbnail / preview URL for an image stored on Google Drive.
+ * Uses Google Drive's official thumbnail endpoint to prevent 429 rate limit issues.
+ * 
  * @param {string} driveUrlOrId - Google Drive link or File ID
  * @param {number} size - Desired max dimension in px (default: 1000)
  * @returns {string} Thumbnail URL
@@ -70,16 +72,27 @@ export const getDriveThumbnailUrl = (driveUrlOrId, size = 1000) => {
   const fileId = extractDriveId(driveUrlOrId);
 
   if (fileId) {
-    // lh3.googleusercontent.com is Google's fast, high-performance thumbnail CDN for Drive files
-    return `https://lh3.googleusercontent.com/d/${fileId}=w${size}`;
+    return `https://drive.google.com/thumbnail?id=${fileId}&sz=w${size}`;
   }
 
-  // If not a Google Drive URL, return original URL (e.g. direct image URL)
   return driveUrlOrId;
 };
 
 /**
- * Generates an alternative thumbnail URL via drive.google.com thumbnail endpoint.
+ * Generates a direct export view URL via Google Drive.
+ * @param {string} driveUrlOrId
+ * @returns {string}
+ */
+export const getDriveDirectViewUrl = (driveUrlOrId) => {
+  const fileId = extractDriveId(driveUrlOrId);
+  if (fileId) {
+    return `https://drive.google.com/uc?export=view&id=${fileId}`;
+  }
+  return driveUrlOrId || '';
+};
+
+/**
+ * Generates an alternative CDN thumbnail URL.
  * @param {string} driveUrlOrId
  * @param {number} size
  * @returns {string}
@@ -87,7 +100,7 @@ export const getDriveThumbnailUrl = (driveUrlOrId, size = 1000) => {
 export const getDriveAltThumbnailUrl = (driveUrlOrId, size = 1000) => {
   const fileId = extractDriveId(driveUrlOrId);
   if (fileId) {
-    return `https://drive.google.com/thumbnail?id=${fileId}&sz=w${size}`;
+    return `https://lh3.googleusercontent.com/d/${fileId}=w${size}`;
   }
   return driveUrlOrId || '';
 };

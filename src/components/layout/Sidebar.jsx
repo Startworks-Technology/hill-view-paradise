@@ -116,22 +116,40 @@ const Sidebar = ({ isOpen, onClose }) => {
           </nav>
         </div>
 
-        {/* Footer with Authenticated Admin Info & Sign Out */}
+        {/* Footer with Authenticated User Info & Sign Out */}
         <div className="p-4 border-t border-slate-800">
           <div className="px-3 py-2 mb-3 flex items-center space-x-3 rounded-xl bg-slate-800/60 border border-slate-700/60">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-              AD
+            <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-xs font-bold ${
+              currentUser?.role === 'admin'
+                ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                : currentUser?.role === 'media'
+                ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30'
+                : 'bg-sky-500/20 text-sky-400 border border-sky-500/30'
+            }`}>
+              {currentUser?.role === 'admin' ? 'AD' : currentUser?.role === 'media' ? 'MD' : 'RS'}
             </div>
             <div className="overflow-hidden min-w-0 flex-1">
               <p className="text-xs font-semibold text-white truncate">
-                {currentUser?.displayName || 'Society Administrator'}
+                {currentUser?.displayName || (
+                  currentUser?.role === 'admin'
+                    ? 'Society Administrator'
+                    : currentUser?.role === 'media'
+                    ? 'Media Manager'
+                    : 'Society Resident'
+                )}
               </p>
               <p className="text-[11px] text-slate-400 truncate">
-                {currentUser?.email || 'admin@hillviewparadise.com'}
+                {currentUser?.email || currentUser?.mobile || 'Active User'}
               </p>
               <div className="mt-1">
-                <span className="inline-flex items-center px-1.5 py-0.2 text-[10px] font-semibold rounded-sm bg-emerald-500/20 text-emerald-300">
-                  Administrator
+                <span className={`inline-flex items-center px-1.5 py-0.2 text-[10px] font-semibold rounded-sm ${
+                  currentUser?.role === 'admin'
+                    ? 'bg-emerald-500/20 text-emerald-300'
+                    : currentUser?.role === 'media'
+                    ? 'bg-purple-500/20 text-purple-300'
+                    : 'bg-sky-500/20 text-sky-300'
+                }`}>
+                  {currentUser?.role === 'admin' ? 'Administrator' : currentUser?.role === 'media' ? 'Media' : 'Resident'}
                 </span>
               </div>
             </div>

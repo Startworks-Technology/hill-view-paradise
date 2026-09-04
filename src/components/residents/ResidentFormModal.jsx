@@ -92,8 +92,11 @@ const ResidentFormModal = ({
       }
     }
 
-    if (formData.phone && !/^\d{10}$/.test(formData.phone.replace(/[\s-+()]/g, ''))) {
-      newErrors.phone = 'Please enter a valid 10-digit phone number';
+    if (formData.phone) {
+      const phoneDigits = formData.phone.replace(/\D/g, '');
+      if (phoneDigits.length < 5 || phoneDigits.length > 15) {
+        newErrors.phone = 'Please enter a valid phone number';
+      }
     }
 
     if (formData.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email.trim())) {
@@ -213,7 +216,7 @@ const ResidentFormModal = ({
         {/* Outstanding Balance Field */}
         <div>
           <Input
-            label="Outstanding Balance (₹)"
+            label="Due (₹)"
             inputMode="decimal"
             placeholder="0"
             helperText="Current unpaid balance or legacy dues (Enter 0 if clear)"

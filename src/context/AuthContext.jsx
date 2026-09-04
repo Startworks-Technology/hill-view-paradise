@@ -6,14 +6,14 @@
  * Responsibilities:
  * 1. Provides `currentUser`, `loading`, `authError`, `login`, and `logout`
  *    to all components throughout the application tree.
- * 2. Listens to Firebase Auth state (`onAuthStateChanged`) for automatic session
- *    restoration on page refreshes.
- * 3. Sanitizes and presents user-friendly error messages upon authentication failures.
+ * 2. Supports login via Email or Mobile Number.
+ * 3. Listens to auth state changes for automatic session restoration.
+ * 4. Manages role-based permissions (`isAdmin`, `role`).
  * ==============================================================================
  */
 
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { loginAdmin, logoutAdmin, subscribeToAuthState } from '../firebase/auth';
+import { loginUser, logoutUser, subscribeToAuthState } from '../firebase/auth';
 
 // Create React context for authentication state
 const AuthContext = createContext(null);
@@ -37,23 +37,25 @@ export const AuthProvider = ({ children }) => {
   }, []);
 
   /**
-   * Log in admin with email & password.
+   * Log in user with email or mobile number & password.
+   * @param {string} identifier (email or mobile number)
+   * @param {string} password
    */
-  const login = async (email, password) => {
+  const login = async (identifier, password) => {
     setAuthError(null);
     try {
-      const user = await loginAdmin(email, password);
+      const user = await loginUser(identifier, password);
       setCurrentUser(user);
       return user;
     } catch (err) {
-      // Translate raw Firebase errors into friendly user messages
-      let friendlyMessage = 'Unable to sign in. Please verify your credentials.';
+      // Translate raw Firebase or app errors into friendly user messages
+      let friendlyMessage = err.message || 'Unable to sign in. Please verify your credentials.';
       if (
         err.code === 'auth/user-not-found' ||
         err.code === 'auth/wrong-password' ||
         err.code === 'auth/invalid-credential'
       ) {
-        friendlyMessage = 'Invalid email or password. Please try again.';
+        friendlyMessage = 'Invalid email/mobile number or password. Please try again.';
       } else if (err.code === 'auth/too-many-requests') {
         friendlyMessage = 'Too many failed login attempts. Please try again later.';
       }
@@ -68,13 +70,18 @@ export const AuthProvider = ({ children }) => {
   const logout = async () => {
     setAuthError(null);
     try {
-      await logoutAdmin();
+      await logoutUser();
     } catch (err) {
       console.error('Logout error:', err);
     } finally {
       setCurrentUser(null);
     }
   };
+
+  const role = currentUser?.role || (currentUser ? 'resident' : null);
+  const isAdmin = Boolean(currentUser && (currentUser.isAdmin || role === 'admin'));
+  const isMedia = Boolean(currentUser && role === 'media');
+  const canManageMedia = Boolean(currentUser && (role === 'admin' || role === 'media'));
 
   const value = {
     currentUser,
@@ -83,7 +90,10 @@ export const AuthProvider = ({ children }) => {
     login,
     logout,
     isAuthenticated: Boolean(currentUser),
-    isAdmin: Boolean(currentUser),
+    isAdmin,
+    isMedia,
+    canManageMedia,
+    role,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

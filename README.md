@@ -6,10 +6,11 @@ A modern, responsive residential society management application built with **Rea
 
 ## 🌟 Key Features
 
-1. **Single Admin Authentication**:
-   - Secure login via Firebase Authentication (`signInWithEmailAndPassword`).
-   - Protected client routes with `onAuthStateChanged` session persistence.
-   - Built-in instant demo credentials helper for easy testing.
+1. **Email or Mobile Number Authentication with Roles**:
+   - Accepts either an **Email Address** (e.g. `admin@hillviewparadise.com`) or **10-Digit Mobile Number** (e.g. `9876543210`).
+   - Authenticates against the dedicated Firestore `users` collection storing `mobile`, `email`, `password`, and `role`.
+   - Role-based permissions (`admin`, `resident`, `staff`) persisted in the active session.
+   - Built-in instant local demo mode with default accounts.
 
 2. **Strict Zero-Array Firestore Schema**:
    - Every single field across all Firestore documents contains **strictly scalar values** (`String`, `Number`, `Boolean`, `Timestamp`, `null`).

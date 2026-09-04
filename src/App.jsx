@@ -26,9 +26,13 @@ import Gallery from './pages/Gallery';
 import NotFound from './pages/NotFound';
 import LoadingSpinner from './components/common/LoadingSpinner';
 import { useAuth } from './hooks/useAuth';
+import { useAutoBilling } from './hooks/useAutoBilling';
 
 function App() {
   const { isAuthenticated, loading } = useAuth();
+
+  // Run client-side auto-scheduler for month-start dues
+  useAutoBilling();
 
   if (loading) {
     return (

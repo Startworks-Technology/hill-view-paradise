@@ -41,5 +41,19 @@ service cloud.firestore {
       allow read: if true;
       allow write: if isAuthenticated();
     }
+
+    // Rules for Users collection (Mobile / Email accounts with roles)
+    // Read allowed for login resolution; write restricted to authenticated admin
+    match /users/{userId} {
+      allow read: if true;
+      allow write: if isAuthenticated();
+    }
+
+    // Rules for Monthly Billing Logs (Maintenance dues audit trails)
+    // Public read for everyone; write restricted to authenticated admin
+    match /billing_logs/{logId} {
+      allow read: if true;
+      allow write: if isAuthenticated();
+    }
   }
 }
