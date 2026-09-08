@@ -1,15 +1,15 @@
 /**
  * ==============================================================================
  * File: src/components/gallery/GalleryCard.jsx
- * Description: Interactive Media Post Card for Gallery Events & Albums
+ * Description: Interactive Media Post Card for Gallery Events & S3 Albums
  * 
  * Features:
  * 1. Multi-image hero cover with total photo/video count badge (+X photos).
  * 2. Mini thumbnail strip preview for posts with multiple photos/videos.
- * 3. High-resolution Google Drive image / video thumbnail with graceful fallback.
- * 4. Visual badges for Album name, Event Date, and Video indicator.
- * 5. Quick action buttons: Fullscreen Lightbox / Video Player, Copy Link, Open in Drive.
- * 6. Admin actions (Edit & Delete) visible exclusively to authenticated administrators.
+ * 3. Direct high-speed S3 image thumbnail rendering with loading skeleton.
+ * 4. Badges for Album name, Event Date, and Video indicator.
+ * 5. Quick action buttons: Fullscreen Lightbox / Video Player, Copy Link.
+ * 6. Admin/Media actions (Edit & Delete) visible exclusively to authorized roles.
  * ==============================================================================
  */
 
@@ -17,9 +17,7 @@ import React, { useState, useEffect } from 'react';
 import {
   Play,
   Image as ImageIcon,
-  ExternalLink,
   Copy,
-  Check,
   Edit2,
   Trash2,
   Maximize2,
@@ -27,7 +25,7 @@ import {
   Layers,
   Calendar,
 } from 'lucide-react';
-import { getDriveThumbnailUrl, getDriveViewUrl } from '../../utils/driveUtils';
+import { isVideoMedia } from '../../utils/s3Utils';
 
 const GalleryCard = ({
   item,
@@ -45,55 +43,33 @@ const GalleryCard = ({
   const files = item.mediaFiles && item.mediaFiles.length > 0 ? item.mediaFiles : [item];
   const primaryFile = files[0] || item;
   const count = files.length;
-  const hasVideo = files.some((f) => f.mediaType === 'video') || item.mediaType === 'video';
+  const hasVideo = files.some((f) => f.mediaType === 'video' || isVideoMedia(f.s3Url)) || item.mediaType === 'video';
 
   const initialThumb =
     primaryFile.thumbnailUrl ||
-    (primaryFile.driveFileId ? getDriveThumbnailUrl(primaryFile.driveFileId, 800) : primaryFile.driveLink);
+    primaryFile.s3Url ||
+    item.thumbnailUrl ||
+    item.s3Url ||
+    item.driveLink ||
+    '';
 
   const [currentSrc, setCurrentSrc] = useState(initialThumb);
-  const [fallbackAttempt, setFallbackAttempt] = useState(0);
-  const driveViewUrl = primaryFile.driveLink || getDriveViewUrl(primaryFile.driveFileId);
 
   // Sync state if item changes
   useEffect(() => {
     setCurrentSrc(initialThumb);
     setImgError(false);
     setImgLoaded(false);
-    setFallbackAttempt(0);
   }, [initialThumb]);
-
-  const handleImageError = () => {
-    const fileId = primaryFile.driveFileId || item.driveFileId;
-    if (fallbackAttempt === 0 && fileId) {
-      // Fallback 1: drive.google.com/uc?export=view
-      setFallbackAttempt(1);
-      setCurrentSrc(`https://drive.google.com/uc?export=view&id=${fileId}`);
-    } else if (fallbackAttempt === 1 && fileId) {
-      // Fallback 2: lh3.googleusercontent.com
-      setFallbackAttempt(2);
-      setCurrentSrc(`https://lh3.googleusercontent.com/d/${fileId}=w800`);
-    } else {
-      setImgError(true);
-      setImgLoaded(true);
-    }
-  };
 
   const handleCopy = (e) => {
     e.stopPropagation();
-    const linkToCopy = primaryFile.driveLink || item.driveLink;
+    const linkToCopy = primaryFile.s3Url || item.s3Url || item.driveLink;
     if (linkToCopy) {
       navigator.clipboard.writeText(linkToCopy);
       setCopied(true);
-      if (onCopySuccess) onCopySuccess('Google Drive link copied to clipboard!');
+      if (onCopySuccess) onCopySuccess('Media link copied to clipboard!');
       setTimeout(() => setCopied(false), 2000);
-    }
-  };
-
-  const handleOpenDrive = (e) => {
-    e.stopPropagation();
-    if (driveViewUrl) {
-      window.open(driveViewUrl, '_blank', 'noopener,noreferrer');
     }
   };
 
@@ -116,14 +92,16 @@ const GalleryCard = ({
           <img
             src={currentSrc}
             alt={item.title || 'Gallery item'}
-            referrerPolicy="no-referrer"
+            loading="lazy"
             onLoad={() => setImgLoaded(true)}
-            onError={handleImageError}
+            onError={() => {
+              setImgError(true);
+              setImgLoaded(true);
+            }}
             className={`
               w-full h-full object-cover transition-transform duration-500 group-hover:scale-105
               ${imgLoaded ? 'opacity-100' : 'opacity-0'}
             `}
-            loading="lazy"
           />
         ) : (
           /* Fallback when direct thumbnail fails */
@@ -140,7 +118,7 @@ const GalleryCard = ({
             <span className="text-xs font-semibold text-slate-200 text-center line-clamp-1">
               {item.title}
             </span>
-            <span className="text-[10px] text-slate-400 mt-1">Google Shared Drive</span>
+            <span className="text-[10px] text-slate-400 mt-1">AWS S3 Media</span>
           </div>
         )}
 
@@ -178,7 +156,7 @@ const GalleryCard = ({
           </div>
         )}
 
-        {/* Hover Action Overlay (Expand / Quick View) */}
+        {/* Hover Action Overlay */}
         <div className="absolute inset-0 bg-gradient-to-t from-slate-950/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex items-end p-3">
           <div className="flex items-center justify-between w-full">
             <span className="text-white text-xs font-semibold flex items-center space-x-1">
@@ -186,18 +164,16 @@ const GalleryCard = ({
               <span>Click to view {count > 1 ? `all ${count}` : ''}</span>
             </span>
 
-            {isAdmin && driveViewUrl && (
-              <div className="flex items-center space-x-1.5" onClick={(e) => e.stopPropagation()}>
-                <button
-                  type="button"
-                  onClick={handleOpenDrive}
-                  className="p-1.5 rounded-lg bg-slate-800/90 text-slate-200 hover:text-white hover:bg-slate-700 transition-colors shadow-xs"
-                  title="Open in Google Drive (Admin only)"
-                >
-                  <ExternalLink className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            )}
+            <div className="flex items-center space-x-1.5" onClick={(e) => e.stopPropagation()}>
+              <button
+                type="button"
+                onClick={handleCopy}
+                className="p-1.5 rounded-lg bg-slate-800/90 text-slate-200 hover:text-white hover:bg-slate-700 transition-colors shadow-xs"
+                title="Copy media URL"
+              >
+                <Copy className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -210,15 +186,14 @@ const GalleryCard = ({
               key={f.id || idx}
               className="h-9 w-9 rounded-md overflow-hidden bg-slate-800 border border-slate-200 shrink-0 relative"
             >
-              {f.mediaType === 'video' ? (
+              {f.mediaType === 'video' || isVideoMedia(f.s3Url) ? (
                 <div className="w-full h-full flex items-center justify-center bg-slate-900 text-emerald-400">
                   <Play className="w-3.5 h-3.5 fill-emerald-400" />
                 </div>
               ) : (
                 <img
-                  src={f.thumbnailUrl || (f.driveFileId ? getDriveThumbnailUrl(f.driveFileId, 120) : f.driveLink)}
+                  src={f.thumbnailUrl || f.s3Url}
                   alt="Thumb"
-                  referrerPolicy="no-referrer"
                   className="w-full h-full object-cover"
                   onError={(e) => {
                     e.target.style.display = 'none';
@@ -257,7 +232,7 @@ const GalleryCard = ({
             <span>{item.eventDate || 'Recent'}</span>
           </span>
 
-          {/* Admin Edit & Delete Actions */}
+          {/* Admin & Media Edit & Delete Actions */}
           {isAdmin && (
             <div className="flex items-center space-x-1" onClick={(e) => e.stopPropagation()}>
               <button

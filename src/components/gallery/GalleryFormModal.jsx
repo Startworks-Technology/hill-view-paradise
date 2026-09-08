@@ -1,14 +1,15 @@
 /**
  * ==============================================================================
  * File: src/components/gallery/GalleryFormModal.jsx
- * Description: Multi-Image/Video Google Drive Month Uploader & Post Form Modal
+ * Description: Multi-Image/Video AWS S3 Uploader & Post Form Modal
  * 
  * Features:
  * 1. Multi-file upload: Select 1 or many photos/videos for a single gallery post.
  * 2. Thumbnail preview grid for pending files with one-click remove option.
- * 3. Batch uploads directly to Google Drive month folder (e.g. `September 2026`).
- * 4. Paste multiple Google Drive links (one per line).
- * 5. Saves entire media list with metadata to Firestore.
+ * 3. Batch uploads directly to AWS S3 organized by month/year folder path.
+ * 4. Real-time aggregate upload progress bar.
+ * 5. Direct S3 / media URL links support.
+ * 6. Saves full media list with metadata to Firestore.
  * ==============================================================================
  */
 
@@ -19,24 +20,19 @@ import {
   Play,
   AlertCircle,
   FolderCheck,
-  CheckCircle2,
   X,
   Plus,
-  Image as ImageIcon,
   Layers,
+  CloudUpload,
+  Info,
 } from 'lucide-react';
 import Modal from '../common/Modal';
 import Input from '../common/Input';
 import Select from '../common/Select';
 import Button from '../common/Button';
 import { MONTHS } from '../../utils/constants';
-import { extractDriveId, getDriveThumbnailUrl, formatFileSize } from '../../utils/driveUtils';
-import {
-  getGoogleAccessToken,
-  getOrCreateMonthFolder,
-  uploadFileToMonthFolder,
-} from '../../services/googleDriveService';
-import { setMonthlyDriveFolder } from '../../services/galleryService';
+import { uploadMediaFileToS3, isS3Configured } from '../../services/s3Service';
+import { isVideoMedia, formatFileSize } from '../../utils/s3Utils';
 
 const DEFAULT_ALBUMS = [
   'General',
@@ -73,15 +69,12 @@ const GalleryFormModal = ({
     eventDate: new Date().toISOString().split('T')[0],
   });
 
-  // Selected Files state (Array of { file, preview, isVideo, id })
+  // Selected Files state (Array of { file, preview, isVideo, id, name, size })
   const [selectedFiles, setSelectedFiles] = useState([]);
   const fileInputRef = useRef(null);
 
   // Link mode state (Supports multiple links - one per line)
-  const [rawDriveLinks, setRawDriveLinks] = useState('');
-
-  const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
-  const rootFolderId = import.meta.env.VITE_GOOGLE_DRIVE_FOLDER_ID;
+  const [rawMediaLinks, setRawMediaLinks] = useState('');
 
   // Initialize form state
   useEffect(() => {
@@ -97,12 +90,12 @@ const GalleryFormModal = ({
         eventDate: initialData.eventDate || new Date().toISOString().split('T')[0],
       });
 
-      // Populate raw drive links
-      const links = (initialData.mediaFiles || []).map((f) => f.driveLink || '').filter(Boolean);
-      if (links.length === 0 && initialData.driveLink) {
-        links.push(initialData.driveLink);
+      // Populate raw media links
+      const links = (initialData.mediaFiles || []).map((f) => f.s3Url || f.driveLink || '').filter(Boolean);
+      if (links.length === 0 && (initialData.s3Url || initialData.driveLink)) {
+        links.push(initialData.s3Url || initialData.driveLink);
       }
-      setRawDriveLinks(links.join('\n'));
+      setRawMediaLinks(links.join('\n'));
       setActiveTab('link');
       setSelectedFiles([]);
     } else {
@@ -116,13 +109,13 @@ const GalleryFormModal = ({
         eventDate: new Date().toISOString().split('T')[0],
       });
       setSelectedFiles([]);
-      setRawDriveLinks('');
-      setActiveTab(googleClientId ? 'upload' : 'link');
+      setRawMediaLinks('');
+      setActiveTab('upload');
     }
     setError('');
     setStatusMessage('');
     setUploadProgress(0);
-  }, [isOpen, initialData, activeMonth, activeYear, googleClientId]);
+  }, [isOpen, initialData, activeMonth, activeYear]);
 
   // Handle local files selection
   const handleFilesChange = (e) => {
@@ -132,7 +125,7 @@ const GalleryFormModal = ({
     setError('');
 
     const newFilesList = files.map((file) => {
-      const isVideo = file.type.startsWith('video/');
+      const isVideo = isVideoMedia(file);
       const fileId = `file_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
       return {
         id: fileId,
@@ -190,58 +183,20 @@ const GalleryFormModal = ({
           return;
         }
 
-        if (!googleClientId) {
-          setError('Google OAuth Client ID is not configured. Please add VITE_GOOGLE_CLIENT_ID to your .env file.');
-          setLoading(false);
-          return;
-        }
-
-        const selectedMonthObj = MONTHS.find((m) => m.value === Number(formData.month));
-        const monthFolderName = `${selectedMonthObj?.label || 'Month'} ${formData.year}`;
-
-        // 1. Obtain Google OAuth Access Token
-        setStatusMessage('Authorizing with Google Drive...');
-        const accessToken = await getGoogleAccessToken(googleClientId);
-
-        // 2. Auto-find or Auto-create Month Subfolder
-        setStatusMessage(`Auto-locating or creating "${monthFolderName}" folder...`);
-        const monthFolder = await getOrCreateMonthFolder({
-          rootFolderId: rootFolderId || '',
-          folderName: monthFolderName,
-          accessToken,
-        });
-
-        // 3. Save Month Folder Link in Firestore
-        if (monthFolder.folderUrl) {
-          try {
-            await setMonthlyDriveFolder(
-              Number(formData.month),
-              Number(formData.year),
-              monthFolder.folderUrl,
-              monthFolder.name
-            );
-          } catch (folderErr) {
-            console.warn('Could not auto-link monthly folder in Firestore:', folderErr);
-          }
-        }
-
-        // 4. Batch Upload files sequentially into Google Drive
         const uploadedMediaFiles = [];
         const totalFiles = selectedFiles.length;
 
+        // Upload files sequentially into AWS S3
         for (let i = 0; i < totalFiles; i++) {
           const item = selectedFiles[i];
           const fileIndexStr = totalFiles > 1 ? ` (${i + 1}/${totalFiles})` : '';
-          setStatusMessage(`Uploading "${item.name}"${fileIndexStr}...`);
+          setStatusMessage(`Uploading "${item.name}"${fileIndexStr} to AWS S3...`);
 
-          const ext = item.name.split('.').pop();
-          const customName = `${formData.title}_${i + 1}_${Date.now()}.${ext}`;
-
-          const uploadResult = await uploadFileToMonthFolder({
+          const uploadResult = await uploadMediaFileToS3({
             file: item.file,
-            targetFolderId: monthFolder.folderId,
-            accessToken,
-            customFileName: customName,
+            month: formData.month,
+            year: formData.year,
+            customPrefix: formData.title,
             onProgress: (pct) => {
               const overall = Math.round(((i * 100) + pct) / totalFiles);
               setUploadProgress(overall);
@@ -249,18 +204,18 @@ const GalleryFormModal = ({
           });
 
           uploadedMediaFiles.push({
-            id: uploadResult.fileId,
-            driveFileId: uploadResult.fileId,
-            driveLink: uploadResult.driveLink,
-            thumbnailUrl: getDriveThumbnailUrl(uploadResult.fileId, 800),
+            id: uploadResult.id || uploadResult.s3Key,
+            s3Key: uploadResult.s3Key,
+            s3Url: uploadResult.s3Url,
+            thumbnailUrl: uploadResult.thumbnailUrl || uploadResult.s3Url,
             mediaType: item.isVideo ? 'video' : 'image',
             name: item.name,
             size: uploadResult.size,
           });
         }
 
-        // 5. Save Multi-Image Post to Firestore
-        setStatusMessage('Saving post to Gallery...');
+        // Save Multi-Image Post to Firestore
+        setStatusMessage('Saving post details to Gallery...');
         const totalSize = uploadedMediaFiles.reduce((acc, f) => acc + (f.size || 0), 0);
 
         await onSubmit({
@@ -274,26 +229,25 @@ const GalleryFormModal = ({
           mediaFiles: uploadedMediaFiles,
         });
       } else {
-        // Mode B: Paste Drive Links
-        const lines = rawDriveLinks
+        // Mode B: Paste Media Links
+        const lines = rawMediaLinks
           .split(/[\n,]+/)
           .map((l) => l.trim())
           .filter(Boolean);
 
         if (lines.length === 0) {
-          setError('Please provide at least one Google Drive link.');
+          setError('Please provide at least one media URL link.');
           setLoading(false);
           return;
         }
 
         const mediaFiles = lines.map((link, idx) => {
-          const driveFileId = extractDriveId(link);
-          const isVideo = link.toLowerCase().includes('video') || link.toLowerCase().includes('.mp4');
+          const isVideo = isVideoMedia(link);
           return {
-            id: driveFileId || `link_${idx}_${Date.now()}`,
-            driveLink: link,
-            driveFileId: driveFileId || '',
-            thumbnailUrl: driveFileId ? getDriveThumbnailUrl(driveFileId, 800) : link,
+            id: `link_${idx}_${Date.now()}`,
+            s3Url: link,
+            s3Key: '',
+            thumbnailUrl: link,
             mediaType: isVideo ? 'video' : 'image',
             name: `${formData.title} - Item ${idx + 1}`,
             size: 0,
@@ -314,7 +268,7 @@ const GalleryFormModal = ({
       onClose();
     } catch (err) {
       console.error('Gallery form submission error:', err);
-      setError(err.message || 'Failed to complete Google Drive upload. Please try again.');
+      setError(err.message || 'Failed to complete AWS S3 upload. Please try again.');
     } finally {
       setLoading(false);
       setStatusMessage('');
@@ -329,7 +283,7 @@ const GalleryFormModal = ({
       isOpen={isOpen}
       onClose={onClose}
       title={initialData ? 'Edit Gallery Post' : 'New Gallery Event Post'}
-      subtitle={`Auto Month Folder: ${monthName} ${formData.year}`}
+      subtitle={`Month Archive: ${monthName} ${formData.year}`}
       size="lg"
     >
       <form onSubmit={handleSubmit} className="space-y-4">
@@ -338,6 +292,16 @@ const GalleryFormModal = ({
           <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-start space-x-2 animate-shake">
             <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
             <span>{error}</span>
+          </div>
+        )}
+
+        {/* Informational banner about AWS S3 */}
+        {!isS3Configured && activeTab === 'upload' && !initialData && (
+          <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-[11px] flex items-center space-x-2">
+            <Info className="w-4 h-4 shrink-0 text-amber-600" />
+            <span>
+              Running in local preview mode. Add <code>VITE_AWS_S3_BUCKET</code> and credentials to <code>.env</code> to upload live to your S3 bucket.
+            </span>
           </div>
         )}
 
@@ -356,8 +320,8 @@ const GalleryFormModal = ({
                 }
               `}
             >
-              <Upload className="w-3.5 h-3.5" />
-              <span>Multi-File Upload to Drive</span>
+              <CloudUpload className="w-3.5 h-3.5" />
+              <span>Multi-File Upload to S3</span>
             </button>
             <button
               type="button"
@@ -372,7 +336,7 @@ const GalleryFormModal = ({
               `}
             >
               <LinkIcon className="w-3.5 h-3.5" />
-              <span>Paste Drive Links</span>
+              <span>Paste Media Links</span>
             </button>
           </div>
         )}
@@ -402,7 +366,7 @@ const GalleryFormModal = ({
                   Click or drag & drop one or multiple photos/videos
                 </p>
                 <p className="text-[11px] text-slate-400 mt-0.5">
-                  Hold Ctrl / Shift to select multiple files at once
+                  Direct upload to AWS S3 &bull; Supports JPG, PNG, WEBP, MP4, MOV
                 </p>
               </div>
             </div>
@@ -435,6 +399,9 @@ const GalleryFormModal = ({
                           <Play className="w-5 h-5 text-emerald-400 fill-emerald-400 mb-1" />
                           <span className="text-[9px] text-slate-300 font-mono truncate max-w-full px-1">
                             {f.name}
+                          </span>
+                          <span className="text-[8px] text-slate-400 font-mono">
+                            {formatFileSize(f.size)}
                           </span>
                         </div>
                       ) : (
@@ -484,7 +451,7 @@ const GalleryFormModal = ({
                 <div className="flex items-center justify-between text-xs font-semibold text-emerald-900 mb-1.5">
                   <div className="flex items-center space-x-1.5">
                     <FolderCheck className="w-4 h-4 text-emerald-600 animate-pulse" />
-                    <span>{statusMessage || 'Processing Google Drive upload...'}</span>
+                    <span>{statusMessage || 'Processing AWS S3 upload...'}</span>
                   </div>
                   <span>{uploadProgress}%</span>
                 </div>
@@ -499,17 +466,17 @@ const GalleryFormModal = ({
           </div>
         )}
 
-        {/* Tab 2: Paste Google Drive Links */}
+        {/* Tab 2: Paste Media Links */}
         {(activeTab === 'link' || initialData) && (
           <div className="space-y-2">
             <label className="block text-xs font-bold text-slate-700">
-              Google Shared Drive Links <span className="text-rose-500">*</span>
+              Media URLs <span className="text-rose-500">*</span>
             </label>
             <textarea
               rows={4}
-              placeholder="Paste one Google Drive link per line:&#10;https://drive.google.com/file/d/1A2B3C.../view&#10;https://drive.google.com/file/d/4D5E6F.../view"
-              value={rawDriveLinks}
-              onChange={(e) => setRawDriveLinks(e.target.value)}
+              placeholder="Paste one media URL per line:&#10;https://your-bucket.s3.amazonaws.com/gallery/photo1.jpg&#10;https://your-bucket.s3.amazonaws.com/gallery/video1.mp4"
+              value={rawMediaLinks}
+              onChange={(e) => setRawMediaLinks(e.target.value)}
               className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs font-mono text-slate-800 placeholder-slate-400 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100"
               required
             />
@@ -614,7 +581,7 @@ const GalleryFormModal = ({
             {initialData
               ? 'Save Changes'
               : activeTab === 'upload'
-              ? `Upload ${selectedFiles.length > 0 ? selectedFiles.length : ''} Files to Drive`
+              ? `Upload ${selectedFiles.length > 0 ? selectedFiles.length : ''} Files to S3`
               : 'Save Post'}
           </Button>
         </div>

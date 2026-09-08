@@ -1,14 +1,15 @@
 /**
  * ==============================================================================
  * File: src/pages/Gallery.jsx
- * Description: Month-Based Society Media Gallery (Google Drive + Firebase)
+ * Description: Month-Based Society Media Gallery (AWS S3 + Firebase)
  * 
  * Features:
  * 1. Month & Year filter (`MonthYearPicker`) for browsing monthly event archives.
  * 2. KPI Analytics: Total Media, Photos, Videos, Albums count.
  * 3. Filters & Search: Media Type (All / Photos / Videos), Album selector, text search.
- * 4. Fullscreen Lightbox & Google Drive video player.
- * 5. Automated Google Drive Month-Wise upload and Firebase sync.
+ * 4. Fullscreen Lightbox & Native HTML5 video player.
+ * 5. Direct AWS S3 Uploads and Firebase synchronization.
+ * 6. Role-Based Access: Admin & Media manage (upload, edit, delete); Residents view.
  * ==============================================================================
  */
 
@@ -40,14 +41,11 @@ import {
   updateMediaItem,
   deleteMediaItem,
 } from '../services/galleryService';
+import { deleteMediaFileFromS3 } from '../services/s3Service';
 import { getMonthName } from '../utils/dateUtils';
-import {
-  getGoogleAccessToken,
-  deleteFileFromGoogleDrive,
-} from '../services/googleDriveService';
 
 const Gallery = () => {
-  const { isAdmin, canManageMedia } = useAuth();
+  const { canManageMedia } = useAuth();
 
   const currentDate = new Date();
   const [selectedMonth, setSelectedMonth] = useState(currentDate.getMonth() + 1);
@@ -138,8 +136,6 @@ const Gallery = () => {
     return acc + (m.mediaType === 'video' ? 1 : 0);
   }, 0);
 
-  const totalAlbumsCount = uniqueAlbums.length;
-
   // Handlers
   const handleCreateOrUpdateMedia = async (mediaData) => {
     if (selectedItemForEdit) {
@@ -165,26 +161,19 @@ const Gallery = () => {
     try {
       setDeleteLoading(true);
 
-      // 1. Delete from Google Drive if file IDs are present and client ID configured
-      const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
-      if (googleClientId) {
-        const filesToDelete = selectedItemForDelete.mediaFiles?.length
-          ? selectedItemForDelete.mediaFiles
-          : [selectedItemForDelete];
+      // 1. Delete associated files from AWS S3
+      const filesToDelete = selectedItemForDelete.mediaFiles?.length
+        ? selectedItemForDelete.mediaFiles
+        : [selectedItemForDelete];
 
-        try {
-          const accessToken = await getGoogleAccessToken(googleClientId);
-          for (const file of filesToDelete) {
-            const fId = file.driveFileId || file.id;
-            if (fId) {
-              await deleteFileFromGoogleDrive({
-                fileId: fId,
-                accessToken,
-              });
-            }
+      for (const file of filesToDelete) {
+        const keyOrUrl = file.s3Key || file.s3Url || file.driveFileId;
+        if (keyOrUrl) {
+          try {
+            await deleteMediaFileFromS3(keyOrUrl);
+          } catch (s3Err) {
+            console.warn('Could not delete file from S3:', s3Err);
           }
-        } catch (driveErr) {
-          console.warn('Could not delete files from Google Drive:', driveErr);
         }
       }
 
@@ -237,7 +226,7 @@ const Gallery = () => {
           </p>
         </div>
 
-        {/* Top Controls: Month Picker & Admin Add Action */}
+        {/* Top Controls: Month Picker & Admin/Media Add Action */}
         <div className="flex items-center space-x-2.5 flex-wrap gap-y-2">
           <MonthYearPicker
             month={selectedMonth}
@@ -374,7 +363,7 @@ const Gallery = () => {
           description={
             searchTerm || typeFilter !== 'all' || albumFilter !== 'all'
               ? 'No photos or videos match your selected search or filter criteria.'
-              : 'Start building this month\'s gallery by uploading photos and videos to Google Drive.'
+              : 'Start building this month\'s gallery by uploading photos and videos to AWS S3.'
           }
           actionLabel={canManageMedia ? 'Add First Photo / Video' : undefined}
           onAction={

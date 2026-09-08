@@ -1,10 +1,11 @@
 /**
  * ==============================================================================
  * File: src/services/galleryService.js
- * Description: Gallery Media & Google Shared Drive Data Access Layer (CRUD)
+ * Description: Gallery Media Data Access Layer (AWS S3 + Firebase Firestore)
  * 
  * Rules:
- * 1. STRICT NO-ARRAY RULE: Every field is a scalar value (string, number, Timestamp, null).
+ * 1. STRICT NO-ARRAY RULE: Every field in the Firestore document is a scalar value.
+ *    Media lists are stored as JSON string `mediaFilesJson`.
  * 2. Month and Year stored as separate scalar numbers for clean composite filtering.
  * 3. Graceful fallback to local storage if Firestore is unconfigured or in demo mode.
  * ==============================================================================
@@ -16,7 +17,6 @@ import {
   collection,
   doc,
   getDocs,
-  getDoc,
   addDoc,
   updateDoc,
   deleteDoc,
@@ -25,15 +25,13 @@ import {
   serverTimestamp,
   Timestamp,
 } from '../firebase/firestore';
-import { extractDriveId, getDriveThumbnailUrl } from '../utils/driveUtils';
+import { isVideoMedia } from '../utils/s3Utils';
 
-// Firestore collection names
+// Firestore collection name
 const GALLERY_COLLECTION = 'gallery';
-const FOLDERS_COLLECTION = 'gallery_folders';
 
-// Local storage keys for fallback simulation
+// Local storage key for fallback simulation
 const LOCAL_STORAGE_GALLERY_KEY = 'hvp_gallery_db';
-const LOCAL_STORAGE_FOLDERS_KEY = 'hvp_gallery_folders_db';
 
 /**
  * Helper to retrieve local mock media items from localStorage.
@@ -53,23 +51,6 @@ const saveLocalGallery = (items) => {
 };
 
 /**
- * Helper to retrieve local mock folders from localStorage.
- * @returns {Array<object>}
- */
-const getLocalFolders = () => {
-  const data = localStorage.getItem(LOCAL_STORAGE_FOLDERS_KEY);
-  return data ? JSON.parse(data) : [];
-};
-
-/**
- * Helper to persist local mock folders to localStorage.
- * @param {Array<object>} folders
- */
-const saveLocalFolders = (folders) => {
-  localStorage.setItem(LOCAL_STORAGE_FOLDERS_KEY, JSON.stringify(folders));
-};
-
-/**
  * Schema Validation Guard:
  * Strictly verifies that NO property in the document payload is an array.
  * @param {object} obj - Payload object being prepared for write
@@ -84,7 +65,7 @@ const assertNoArrayFields = (obj) => {
 
 /**
  * Helper to parse media item and normalize mediaFiles.
- * Ensures backward compatibility with legacy single-item posts.
+ * Supports S3 URLs, direct media URLs, and legacy posts.
  * @param {object} rawItem
  * @returns {object}
  */
@@ -100,16 +81,18 @@ export const normalizeMediaPost = (rawItem) => {
     }
   }
 
-  // If no parsed files, construct from legacy scalar fields
+  // If no parsed files, construct from single post scalar fields
   if (!parsedFiles || parsedFiles.length === 0) {
-    if (rawItem.driveLink || rawItem.driveFileId) {
+    const singleUrl = rawItem.s3Url || rawItem.mediaUrl || rawItem.driveLink || rawItem.thumbnailUrl || '';
+    if (singleUrl) {
+      const isVideo = rawItem.mediaType === 'video' || isVideoMedia(singleUrl);
       parsedFiles = [
         {
-          id: rawItem.driveFileId || 'file_0',
-          driveLink: rawItem.driveLink || '',
-          driveFileId: rawItem.driveFileId || '',
-          thumbnailUrl: rawItem.thumbnailUrl || (rawItem.driveFileId ? getDriveThumbnailUrl(rawItem.driveFileId) : rawItem.driveLink),
-          mediaType: rawItem.mediaType || 'image',
+          id: rawItem.s3Key || rawItem.driveFileId || 'file_0',
+          s3Url: singleUrl,
+          s3Key: rawItem.s3Key || '',
+          thumbnailUrl: rawItem.thumbnailUrl || singleUrl,
+          mediaType: isVideo ? 'video' : 'image',
           name: rawItem.title || 'Media file',
           size: rawItem.fileSize || 0,
         },
@@ -119,17 +102,19 @@ export const normalizeMediaPost = (rawItem) => {
 
   const primaryFile = parsedFiles[0] || {};
   const mediaCount = parsedFiles.length || 1;
-  const hasVideo = parsedFiles.some((f) => f.mediaType === 'video');
+  const hasVideo = parsedFiles.some((f) => f.mediaType === 'video' || isVideoMedia(f.s3Url || f.thumbnailUrl));
+
+  const primaryUrl = primaryFile.s3Url || rawItem.s3Url || rawItem.mediaUrl || primaryFile.thumbnailUrl || rawItem.thumbnailUrl || '';
+  const primaryThumb = primaryFile.thumbnailUrl || rawItem.thumbnailUrl || primaryUrl;
 
   return {
     ...rawItem,
     mediaFiles: parsedFiles,
     mediaCount,
     hasVideo,
-    // Provide cover image / primary details
-    driveLink: rawItem.driveLink || primaryFile.driveLink || '',
-    driveFileId: rawItem.driveFileId || primaryFile.driveFileId || '',
-    thumbnailUrl: rawItem.thumbnailUrl || primaryFile.thumbnailUrl || '',
+    s3Url: primaryUrl,
+    s3Key: primaryFile.s3Key || rawItem.s3Key || '',
+    thumbnailUrl: primaryThumb,
     mediaType: rawItem.mediaType || (hasVideo ? 'video' : 'image'),
   };
 };
@@ -156,13 +141,12 @@ export const getMediaByMonth = async (month, year) => {
       const snapshot = await getDocs(q);
       const items = snapshot.docs.map((docSnap) => {
         const data = docSnap.data();
-        const normalized = normalizeMediaPost({
+        return normalizeMediaPost({
           id: docSnap.id,
           ...data,
           createdAt: data.createdAt instanceof Timestamp ? data.createdAt.toDate().toISOString() : data.createdAt,
           updatedAt: data.updatedAt instanceof Timestamp ? data.updatedAt.toDate().toISOString() : data.updatedAt,
         });
-        return normalized;
       });
 
       // Sort client-side by eventDate or createdAt descending
@@ -184,7 +168,7 @@ export const getMediaByMonth = async (month, year) => {
 };
 
 /**
- * Create a new gallery media / post record with multiple files.
+ * Create a new gallery media / post record with S3 files.
  * @param {object} itemData - Media post payload
  * @returns {Promise<object>} Created media item with generated ID
  */
@@ -194,10 +178,10 @@ export const createMediaItem = async (itemData) => {
     ? itemData.mediaFiles
     : [
         {
-          id: itemData.driveFileId || `file_${Date.now()}`,
-          driveLink: itemData.driveLink || '',
-          driveFileId: itemData.driveFileId || extractDriveId(itemData.driveLink) || '',
-          thumbnailUrl: itemData.thumbnailUrl || (itemData.driveFileId ? getDriveThumbnailUrl(itemData.driveFileId) : itemData.driveLink),
+          id: itemData.s3Key || `file_${Date.now()}`,
+          s3Url: itemData.s3Url || itemData.thumbnailUrl || '',
+          s3Key: itemData.s3Key || '',
+          thumbnailUrl: itemData.thumbnailUrl || itemData.s3Url || '',
           mediaType: itemData.mediaType || 'image',
           name: itemData.title || 'Media File',
           size: Number(itemData.fileSize) || 0,
@@ -205,24 +189,27 @@ export const createMediaItem = async (itemData) => {
       ];
 
   const primaryFile = filesList[0] || {};
-  const driveFileId = primaryFile.driveFileId || extractDriveId(primaryFile.driveLink);
-  const thumbnailUrl = primaryFile.thumbnailUrl || (driveFileId ? getDriveThumbnailUrl(driveFileId) : primaryFile.driveLink);
+  const primaryUrl = primaryFile.s3Url || itemData.s3Url || '';
+  const primaryThumb = primaryFile.thumbnailUrl || itemData.thumbnailUrl || primaryUrl;
+  const isVideo = filesList.some((f) => f.mediaType === 'video' || isVideoMedia(f.s3Url));
+
+  const totalSize = filesList.reduce((acc, f) => acc + (f.size || 0), 0);
 
   const payload = {
-    title: itemData.title ? itemData.title.trim() : 'Untitled Media',
+    title: itemData.title ? itemData.title.trim() : 'Untitled Event',
     description: itemData.description ? itemData.description.trim() : '',
-    mediaType: itemData.mediaType || (filesList.some((f) => f.mediaType === 'video') ? 'video' : 'image'),
-    driveLink: primaryFile.driveLink || itemData.driveLink || '',
-    driveFileId: driveFileId || '',
-    thumbnailUrl: thumbnailUrl || '',
+    mediaType: itemData.mediaType || (isVideo ? 'video' : 'image'),
+    s3Url: primaryUrl,
+    s3Key: primaryFile.s3Key || itemData.s3Key || '',
+    thumbnailUrl: primaryThumb,
     album: itemData.album ? itemData.album.trim() : 'General',
     month: Number(itemData.month) || new Date().getMonth() + 1,
     year: Number(itemData.year) || new Date().getFullYear(),
     eventDate: itemData.eventDate || new Date().toISOString().split('T')[0],
-    fileSize: Number(itemData.fileSize) || 0,
+    fileSize: totalSize || Number(itemData.fileSize) || 0,
     mediaCount: filesList.length,
     mediaFilesJson: JSON.stringify(filesList), // Scalar JSON string to satisfy strict no-array rule
-    uploadedBy: itemData.uploadedBy || 'Administrator',
+    uploadedBy: itemData.uploadedBy || 'Admin/Media',
   };
 
   assertNoArrayFields(payload);
@@ -285,14 +272,13 @@ export const updateMediaItem = async (id, updateData) => {
     payload.mediaCount = updateData.mediaFiles.length;
     const primary = updateData.mediaFiles[0];
     if (primary) {
-      payload.driveLink = primary.driveLink || '';
-      payload.driveFileId = primary.driveFileId || '';
-      payload.thumbnailUrl = primary.thumbnailUrl || '';
+      payload.s3Url = primary.s3Url || '';
+      payload.s3Key = primary.s3Key || '';
+      payload.thumbnailUrl = primary.thumbnailUrl || primary.s3Url || '';
     }
-  } else if (updateData.driveLink !== undefined) {
-    payload.driveLink = updateData.driveLink.trim();
-    payload.driveFileId = extractDriveId(updateData.driveLink) || '';
-    payload.thumbnailUrl = payload.driveFileId ? getDriveThumbnailUrl(payload.driveFileId) : updateData.driveLink;
+  } else if (updateData.s3Url !== undefined) {
+    payload.s3Url = updateData.s3Url.trim();
+    payload.thumbnailUrl = updateData.thumbnailUrl || updateData.s3Url.trim();
   }
 
   assertNoArrayFields(payload);
@@ -328,7 +314,7 @@ export const updateMediaItem = async (id, updateData) => {
 };
 
 /**
- * Delete a gallery media record.
+ * Delete a gallery media record from Firestore.
  * @param {string} id - Document ID
  * @returns {Promise<boolean>}
  */
@@ -350,106 +336,4 @@ export const deleteMediaItem = async (id) => {
   const filtered = localItems.filter((item) => item.id !== id);
   saveLocalGallery(filtered);
   return true;
-};
-
-/**
- * Get the Google Shared Drive Folder link configured for a specific month and year.
- * @param {number} month
- * @param {number} year
- * @returns {Promise<object|null>}
- */
-export const getMonthlyDriveFolder = async (month, year) => {
-  const numMonth = Number(month);
-  const numYear = Number(year);
-
-  if (isFirebaseConfigured && db) {
-    try {
-      const colRef = collection(db, FOLDERS_COLLECTION);
-      const q = query(
-        colRef,
-        where('month', '==', numMonth),
-        where('year', '==', numYear)
-      );
-      const snapshot = await getDocs(q);
-      if (!snapshot.empty) {
-        const docSnap = snapshot.docs[0];
-        return { id: docSnap.id, ...docSnap.data() };
-      }
-    } catch (error) {
-      console.warn('Firestore getMonthlyDriveFolder failed, checking local storage:', error);
-    }
-  }
-
-  const localFolders = getLocalFolders();
-  return (
-    localFolders.find(
-      (f) => Number(f.month) === numMonth && Number(f.year) === numYear
-    ) || null
-  );
-};
-
-/**
- * Set or update the Google Shared Drive Folder link for a specific month and year.
- * @param {number} month
- * @param {number} year
- * @param {string} driveFolderUrl
- * @param {string} [folderName]
- * @returns {Promise<object>}
- */
-export const setMonthlyDriveFolder = async (month, year, driveFolderUrl, folderName = '') => {
-  const numMonth = Number(month);
-  const numYear = Number(year);
-  const folderId = extractDriveId(driveFolderUrl);
-
-  const payload = {
-    month: numMonth,
-    year: numYear,
-    driveFolderUrl: driveFolderUrl.trim(),
-    folderId: folderId || '',
-    folderName: folderName ? folderName.trim() : `Gallery - ${month}/${year}`,
-  };
-
-  assertNoArrayFields(payload);
-
-  if (isFirebaseConfigured && db) {
-    try {
-      const existing = await getMonthlyDriveFolder(month, year);
-      if (existing && existing.id) {
-        const docRef = doc(db, FOLDERS_COLLECTION, existing.id);
-        await updateDoc(docRef, { ...payload, updatedAt: serverTimestamp() });
-        return { id: existing.id, ...payload };
-      } else {
-        const colRef = collection(db, FOLDERS_COLLECTION);
-        const docRef = await addDoc(colRef, {
-          ...payload,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
-        return { id: docRef.id, ...payload };
-      }
-    } catch (error) {
-      console.warn('Firestore setMonthlyDriveFolder failed, saving to local storage:', error);
-    }
-  }
-
-  // Fallback: Local storage
-  const localFolders = getLocalFolders();
-  const index = localFolders.findIndex(
-    (f) => Number(f.month) === numMonth && Number(f.year) === numYear
-  );
-
-  const newFolder = {
-    id: index !== -1 ? localFolders[index].id : `folder_${Date.now()}`,
-    ...payload,
-    updatedAt: new Date().toISOString(),
-  };
-
-  if (index !== -1) {
-    localFolders[index] = newFolder;
-  } else {
-    localFolders.push(newFolder);
-  }
-
-  saveLocalFolders(localFolders);
-  return newFolder;
 };

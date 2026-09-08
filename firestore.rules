@@ -2,9 +2,18 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     
-    // Helper function to check if the user is authenticated admin
+    // Helper function to check if the user is authenticated admin or manager
     function isAuthenticated() {
       return request.auth != null;
+    }
+
+    // Helper function to check if user has media or admin role
+    function isMediaOrAdmin() {
+      return request.auth != null && (
+        request.auth.token.role == 'admin' ||
+        request.auth.token.role == 'media' ||
+        request.auth.token.isAdmin == true
+      );
     }
 
     // Rules for Residents collection
@@ -28,18 +37,11 @@ service cloud.firestore {
       allow write: if isAuthenticated();
     }
 
-    // Rules for Gallery (Photos & Videos metadata with Drive links)
-    // Public read for everyone; write restricted to authenticated admin
+    // Rules for Gallery (Photos & Videos metadata with S3 links)
+    // Public read for all residents and visitors; write restricted to Admin and Media roles
     match /gallery/{mediaId} {
       allow read: if true;
-      allow write: if isAuthenticated();
-    }
-
-    // Rules for Gallery Folders (Google Shared Drive monthly folders)
-    // Public read for everyone; write restricted to authenticated admin
-    match /gallery_folders/{folderId} {
-      allow read: if true;
-      allow write: if isAuthenticated();
+      allow write: if isMediaOrAdmin();
     }
 
     // Rules for Users collection (Mobile / Email accounts with roles)
