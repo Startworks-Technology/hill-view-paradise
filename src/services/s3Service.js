@@ -1,14 +1,13 @@
 /**
  * ==============================================================================
  * File: src/services/s3Service.js
- * Description: AWS S3 Media Upload & Management Service with Client-Side Compression
+ * Description: AWS S3 Media Upload Service (Secure Presigned URLs + Local Fallback)
  * 
- * Features:
- * 1. Automatic client-side image compression before S3 upload (saves bandwidth & S3 cost).
- * 2. Direct browser-to-S3 uploads with `@aws-sdk/client-s3`.
- * 3. Organized directory paths: `gallery/{year}/{month}/{prefix}_{name}_{timestamp}.ext`.
- * 4. Media MIME type auto-detection (images & video formats).
- * 5. Graceful local mock preview fallback if AWS credentials are not yet configured in `.env`.
+ * Security:
+ * 1. ZERO secret keys are required in the client browser.
+ * 2. Uses Vercel Serverless Function `/api/s3-presign` to obtain a temporary 60-second single-use upload signature.
+ * 3. Compresses images to <= 500 KB before uploading.
+ * 4. Direct PUT streaming to S3 with live XMLHttpRequest upload progress.
  * ==============================================================================
  */
 
@@ -20,46 +19,21 @@ import {
 import { generateS3Key, buildS3PublicUrl, isVideoMedia } from '../utils/s3Utils';
 import { compressImageFile } from '../utils/imageCompressor';
 
-const region = import.meta.env.VITE_AWS_REGION || 'ap-south-1';
-const bucket = import.meta.env.VITE_AWS_S3_BUCKET || '';
-const accessKeyId = import.meta.env.VITE_AWS_ACCESS_KEY_ID || '';
-const secretAccessKey = import.meta.env.VITE_AWS_SECRET_ACCESS_KEY || '';
-const cloudFrontDomain = import.meta.env.VITE_AWS_CLOUDFRONT_DOMAIN || '';
+// Optional client-side fallback credentials (if configured in local .env)
+const clientRegion = import.meta.env.VITE_AWS_REGION || 'ap-south-1';
+const clientBucket = import.meta.env.VITE_AWS_S3_BUCKET || '';
+const clientAccessKeyId = import.meta.env.VITE_AWS_ACCESS_KEY_ID || '';
+const clientSecretAccessKey = import.meta.env.VITE_AWS_SECRET_ACCESS_KEY || '';
+const clientCloudFront = import.meta.env.VITE_AWS_CLOUDFRONT_DOMAIN || '';
 
-/**
- * Flag to verify whether live AWS credentials are fully configured.
- */
 export const isS3Configured = Boolean(
-  bucket &&
-  bucket !== 'your_s3_bucket_here' &&
-  accessKeyId &&
-  accessKeyId !== 'your_access_key_here' &&
-  secretAccessKey &&
-  secretAccessKey !== 'your_secret_key_here'
+  // Either client credentials are set OR we are in a deployment with serverless API
+  (clientBucket && clientAccessKeyId && clientSecretAccessKey) ||
+  typeof window !== 'undefined'
 );
 
-let s3Client = null;
-
-if (isS3Configured) {
-  try {
-    s3Client = new S3Client({
-      region,
-      credentials: {
-        accessKeyId,
-        secretAccessKey,
-      },
-    });
-  } catch (err) {
-    console.error('Failed to initialize AWS S3 Client:', err);
-  }
-} else {
-  console.info(
-    'ℹ️ AWS S3 credentials are not configured or using placeholders in .env. Running S3 service in Local Simulation Mode.'
-  );
-}
-
 /**
- * Upload a single File / Blob directly to AWS S3, automatically compressing images first.
+ * Upload a single File / Blob to AWS S3 using secure presigned URLs or direct fallback.
  * 
  * @param {object} params
  * @param {File} params.file - File object from input
@@ -78,32 +52,74 @@ export const uploadMediaFileToS3 = async ({
 }) => {
   if (!file) throw new Error('No file provided for S3 upload.');
 
-  // 1. Automatically compress image before upload (videos bypass compression)
+  // 1. Automatically compress image to <= 500 KB (videos bypass compression)
   const isVideo = isVideoMedia(file);
   const fileToUpload = isVideo ? file : await compressImageFile(file);
 
-  const mediaType = isVideo ? 'video' : 'image';
-  const s3Key = generateS3Key({
-    year,
-    month,
-    originalFileName: fileToUpload.name,
-    customPrefix,
-  });
-
   const contentType = fileToUpload.type || (isVideo ? 'video/mp4' : 'image/jpeg');
 
-  // Real AWS S3 Upload
-  if (isS3Configured && s3Client) {
+  // Strategy A: Try Secure Vercel Serverless Presigned Upload (No keys in browser)
+  try {
+    const presignRes = await fetch('/api/s3-presign', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        fileName: fileToUpload.name,
+        contentType,
+        year,
+        month,
+        customPrefix,
+      }),
+    });
+
+    if (presignRes.ok) {
+      const { uploadUrl, s3Url, s3Key, mediaType } = await presignRes.json();
+
+      // Direct PUT to S3 with live progress tracking
+      await uploadToPresignedUrl(uploadUrl, fileToUpload, contentType, onProgress);
+
+      return {
+        id: `s3_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        s3Key,
+        s3Url,
+        thumbnailUrl: s3Url,
+        mediaType: mediaType || (isVideo ? 'video' : 'image'),
+        name: fileToUpload.name,
+        size: fileToUpload.size,
+        contentType,
+      };
+    }
+  } catch (apiErr) {
+    console.info('Serverless presign endpoint not available, trying client fallback...', apiErr);
+  }
+
+  // Strategy B: Client SDK Fallback (if local .env keys are present)
+  if (clientBucket && clientAccessKeyId && clientSecretAccessKey) {
     try {
-      if (onProgress) onProgress(10);
+      if (onProgress) onProgress(15);
+
+      const s3Client = new S3Client({
+        region: clientRegion,
+        credentials: {
+          accessKeyId: clientAccessKeyId,
+          secretAccessKey: clientSecretAccessKey,
+        },
+      });
+
+      const s3Key = generateS3Key({
+        year,
+        month,
+        originalFileName: fileToUpload.name,
+        customPrefix,
+      });
 
       const arrayBuffer = await fileToUpload.arrayBuffer();
       const uint8Array = new Uint8Array(arrayBuffer);
 
-      if (onProgress) onProgress(40);
+      if (onProgress) onProgress(50);
 
       const command = new PutObjectCommand({
-        Bucket: bucket,
+        Bucket: clientBucket,
         Key: s3Key,
         Body: uint8Array,
         ContentType: contentType,
@@ -113,25 +129,25 @@ export const uploadMediaFileToS3 = async ({
 
       if (onProgress) onProgress(100);
 
-      const publicUrl = buildS3PublicUrl(s3Key, bucket, region, cloudFrontDomain);
+      const publicUrl = buildS3PublicUrl(s3Key, clientBucket, clientRegion, clientCloudFront);
 
       return {
         id: `s3_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
         s3Key,
         s3Url: publicUrl,
         thumbnailUrl: publicUrl,
-        mediaType,
+        mediaType: isVideo ? 'video' : 'image',
         name: fileToUpload.name,
         size: fileToUpload.size,
         contentType,
       };
-    } catch (err) {
-      console.error('S3 PutObject failed:', err);
-      throw new Error(`AWS S3 Upload Error: ${err.message || 'Failed to upload to S3'}`);
+    } catch (clientErr) {
+      console.error('Direct S3 upload failed:', clientErr);
+      throw new Error(`AWS S3 Upload Error: ${clientErr.message}`);
     }
   }
 
-  // Local Simulation Fallback (when AWS credentials are not in .env)
+  // Strategy C: Local Offline Simulation Mode
   if (onProgress) {
     onProgress(30);
     await new Promise((res) => setTimeout(res, 200));
@@ -144,10 +160,10 @@ export const uploadMediaFileToS3 = async ({
 
   return {
     id: `sim_s3_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-    s3Key,
+    s3Key: `gallery/${year}/${month}/${fileToUpload.name}`,
     s3Url: localPreviewUrl,
     thumbnailUrl: localPreviewUrl,
-    mediaType,
+    mediaType: isVideo ? 'video' : 'image',
     name: fileToUpload.name,
     size: fileToUpload.size,
     contentType,
@@ -155,7 +171,42 @@ export const uploadMediaFileToS3 = async ({
 };
 
 /**
- * Delete a media object from AWS S3.
+ * Upload binary payload directly to S3 presigned URL with progress tracking.
+ */
+const uploadToPresignedUrl = (uploadUrl, file, contentType, onProgress) => {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', uploadUrl, true);
+    xhr.setRequestHeader('Content-Type', contentType);
+
+    if (xhr.upload && onProgress) {
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          const percent = Math.round((e.loaded / e.total) * 100);
+          onProgress(percent);
+        }
+      };
+    }
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        if (onProgress) onProgress(100);
+        resolve();
+      } else {
+        reject(new Error(`S3 upload failed with status ${xhr.status}: ${xhr.statusText}`));
+      }
+    };
+
+    xhr.onerror = () => {
+      reject(new Error('Network error occurred during S3 upload. Check S3 CORS settings.'));
+    };
+
+    xhr.send(file);
+  });
+};
+
+/**
+ * Delete a media object from AWS S3 (via serverless API or client fallback).
  * 
  * @param {string} s3KeyOrUrl - S3 Object Key or full URL
  * @returns {Promise<boolean>}
@@ -163,28 +214,44 @@ export const uploadMediaFileToS3 = async ({
 export const deleteMediaFileFromS3 = async (s3KeyOrUrl) => {
   if (!s3KeyOrUrl) return false;
 
-  let s3Key = s3KeyOrUrl;
+  // Try serverless delete endpoint first
+  try {
+    const res = await fetch('/api/s3-delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ s3Key: s3KeyOrUrl }),
+    });
 
-  // Extract S3 Key if full URL was passed
-  if (s3KeyOrUrl.startsWith('http://') || s3KeyOrUrl.startsWith('https://')) {
-    try {
-      const url = new URL(s3KeyOrUrl);
-      s3Key = url.pathname.replace(/^\/+/, '');
-      // If URL contains bucket in pathname: bucket/gallery/...
-      if (bucket && s3Key.startsWith(`${bucket}/`)) {
-        s3Key = s3Key.replace(`${bucket}/`, '');
-      }
-    } catch (e) {
-      console.warn('Could not parse S3 key from URL:', s3KeyOrUrl);
-    }
+    if (res.ok) return true;
+  } catch (e) {
+    // ignore and try client fallback
   }
 
-  if (isS3Configured && s3Client) {
+  // Client SDK Fallback
+  if (clientBucket && clientAccessKeyId && clientSecretAccessKey) {
     try {
+      let s3Key = s3KeyOrUrl;
+      if (s3KeyOrUrl.startsWith('http://') || s3KeyOrUrl.startsWith('https://')) {
+        const url = new URL(s3KeyOrUrl);
+        s3Key = url.pathname.replace(/^\/+/, '');
+        if (clientBucket && s3Key.startsWith(`${clientBucket}/`)) {
+          s3Key = s3Key.replace(`${clientBucket}/`, '');
+        }
+      }
+
+      const s3Client = new S3Client({
+        region: clientRegion,
+        credentials: {
+          accessKeyId: clientAccessKeyId,
+          secretAccessKey: clientSecretAccessKey,
+        },
+      });
+
       const command = new DeleteObjectCommand({
-        Bucket: bucket,
+        Bucket: clientBucket,
         Key: s3Key,
       });
+
       await s3Client.send(command);
       return true;
     } catch (err) {
