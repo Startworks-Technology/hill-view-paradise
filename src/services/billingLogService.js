@@ -77,16 +77,19 @@ export const createBillingLog = async (logData) => {
   const monthKey = `${numYear}-${String(numMonth).padStart(2, '0')}`;
   const docId = `bill_${numYear}_${String(numMonth).padStart(2, '0')}`;
 
+  const existing = await getBillingLogByMonth(numMonth, numYear);
+
   const payload = {
     month: numMonth,
     year: numYear,
     monthKey,
-    billedDate: logData.billedDate || new Date().toISOString(),
+    billedDate: existing?.billedDate || logData.billedDate || new Date().toISOString(),
     billedPropertiesCount: Number(logData.billedPropertiesCount) || 0,
     totalBilledAmount: Number(logData.totalBilledAmount) || 0,
     status: 'Completed',
-    triggeredBy: logData.triggeredBy || 'Manual (Admin)',
-    createdAt: serverTimestamp(),
+    triggeredBy: existing?.triggeredBy || logData.triggeredBy || 'Manual (Admin)',
+    createdAt: existing?.createdAt || serverTimestamp(),
+    updatedAt: serverTimestamp(),
   };
 
   const docRef = doc(db, COLLECTION_NAME, docId);

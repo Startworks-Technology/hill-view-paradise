@@ -11,7 +11,7 @@
  */
 
 import { useEffect, useRef } from 'react';
-import { generateMonthlyDues, getResidents } from '../services/residentService';
+import { generateMonthlyDues } from '../services/residentService';
 import { getBillingLogByMonth } from '../services/billingLogService';
 
 export const useAutoBilling = () => {
@@ -30,21 +30,20 @@ export const useAutoBilling = () => {
         const currentYear = now.getFullYear();
         const monthKey = `${currentYear}-${String(currentMonth).padStart(2, '0')}`;
 
-        // 1. Fetch current month billing log and resident profiles from Firestore
-        const [existingLog, residents] = await Promise.all([
-          getBillingLogByMonth(currentMonth, currentYear),
-          getResidents(),
-        ]);
+        // 1. Check in DB only: Fetch current month billing log from Firestore billing_logs table
+        const existingLog = await getBillingLogByMonth(currentMonth, currentYear);
 
-        const hasUnbilledResidents = residents.some((r) => r.lastBilledMonthYear !== monthKey);
+        // 2. If the database already shows this month as Completed, STOP.
+        // It runs strictly once a month only.
+        if (existingLog && existingLog.status === 'Completed') {
+          return;
+        }
 
-        // 2. If log is missing OR residents have not had their dues applied
-        if (!existingLog || existingLog.status !== 'Completed' || hasUnbilledResidents) {
-          console.info(`[Auto-Billing] Applying monthly maintenance dues for ${monthKey}...`);
-          const res = await generateMonthlyDues(currentMonth, currentYear, 'Auto-Scheduler', true);
-          if (res.billedCount > 0) {
-            console.info(`[Auto-Billing] Successfully billed ₹${res.totalBilled} across ${res.billedCount} properties for ${monthKey}.`);
-          }
+        // 3. If unbilled in the DB, generate monthly dues once
+        console.info(`[Auto-Billing] Applying monthly maintenance dues for ${monthKey}...`);
+        const res = await generateMonthlyDues(currentMonth, currentYear, 'Auto-Scheduler', false);
+        if (res.billedCount > 0) {
+          console.info(`[Auto-Billing] Successfully billed ₹${res.totalBilled} across ${res.billedCount} properties for ${monthKey}.`);
         }
       } catch (err) {
         console.warn('[Auto-Billing] Auto billing evaluation warning:', err);

@@ -363,7 +363,7 @@ export const generateMonthlyDues = async (month, year, triggeredBy = 'Manual (Ad
   const numYear = Number(year);
   const monthKey = `${numYear}-${String(numMonth).padStart(2, '0')}`;
 
-  // Check if this month was already logged as completed in Firestore billing_logs
+  // Check if this month was already logged as completed in Firestore billing_logs in the DB
   const existingLog = await getBillingLogByMonth(numMonth, numYear);
   if (existingLog && existingLog.status === 'Completed' && !force) {
     return {
@@ -376,12 +376,26 @@ export const generateMonthlyDues = async (month, year, triggeredBy = 'Manual (Ad
   }
 
   const residents = await getResidents();
-  let billedCount = 0;
-  let totalBilled = 0;
+  
+  // Strictly only bill residents who have NOT yet been billed for this month
+  const residentsToBill = residents.filter((resident) => resident.lastBilledMonthYear !== monthKey);
+
+  if (residentsToBill.length === 0) {
+    return {
+      alreadyBilled: true,
+      billedCount: existingLog?.billedPropertiesCount || 0,
+      totalBilled: existingLog?.totalBilledAmount || 0,
+      monthKey,
+      log: existingLog,
+    };
+  }
+
+  let newlyBilledCount = 0;
+  let newlyBilledTotal = 0;
 
   const batch = writeBatch(db);
 
-  for (const resident of residents) {
+  for (const resident of residentsToBill) {
     const fee = Number(resident.monthlyMaintenance) || 0;
     const currentBal = Number(resident.outstandingBalance) || 0;
     const newBalance = Math.round((currentBal + fee) * 100) / 100;
@@ -393,9 +407,14 @@ export const generateMonthlyDues = async (month, year, triggeredBy = 'Manual (Ad
       updatedAt: serverTimestamp(),
     });
 
-    billedCount += 1;
-    totalBilled += fee;
+    newlyBilledCount += 1;
+    newlyBilledTotal += fee;
   }
+
+  const prevCount = Number(existingLog?.billedPropertiesCount) || 0;
+  const prevTotal = Number(existingLog?.totalBilledAmount) || 0;
+  const totalBilledCount = prevCount + newlyBilledCount;
+  const totalBilledAmount = prevTotal + newlyBilledTotal;
 
   // Stage the billing log in the same atomic transaction in Cloud Firestore
   const logId = `bill_${numYear}_${String(numMonth).padStart(2, '0')}`;
@@ -405,20 +424,27 @@ export const generateMonthlyDues = async (month, year, triggeredBy = 'Manual (Ad
     month: numMonth,
     year: numYear,
     monthKey,
-    billedDate: new Date().toISOString(),
-    billedPropertiesCount: billedCount,
-    totalBilledAmount: totalBilled,
+    // Preserve the original billedDate from DB if it exists, never overwrite it
+    billedDate: existingLog?.billedDate || new Date().toISOString(),
+    billedPropertiesCount: totalBilledCount,
+    totalBilledAmount,
     status: 'Completed',
-    triggeredBy,
-    createdAt: serverTimestamp(),
+    triggeredBy: existingLog ? existingLog.triggeredBy : triggeredBy,
+    updatedAt: serverTimestamp(),
   };
+
+  if (!existingLog) {
+    logPayload.createdAt = serverTimestamp();
+  }
 
   batch.set(logDocRef, logPayload, { merge: true });
   await batch.commit(); // Atomic commit directly to Cloud Firestore
 
   return {
-    billedCount,
-    totalBilled,
+    billedCount: newlyBilledCount,
+    totalBilled: newlyBilledTotal,
+    totalCumulativeCount: totalBilledCount,
+    totalCumulativeAmount: totalBilledAmount,
     monthKey,
     log: logPayload,
     alreadyBilled: false,

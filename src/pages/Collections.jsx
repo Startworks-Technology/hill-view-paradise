@@ -113,11 +113,11 @@ const Collections = () => {
   const paidCount = paidCollections.length;
   const pendingCount = Math.max(0, residents.length - paidCount);
 
-  // Month-start dues status derived from billing_logs table and resident billing state
+  // Month-start dues status derived strictly from DB billing_logs table
+  const isMonthBilled = Boolean(billingLog && billingLog.status === 'Completed');
   const monthKey = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}`;
   const unbilledResidents = residents.filter((r) => r.lastBilledMonthYear !== monthKey);
   const unbilledCount = unbilledResidents.length;
-  const isMonthBilled = Boolean(billingLog && billingLog.status === 'Completed' && unbilledCount === 0);
 
   // Handle Month-Start Dues Generation
   const handleGenerateDuesConfirm = async () => {
@@ -125,7 +125,7 @@ const Collections = () => {
 
     try {
       setActionLoading(true);
-      const res = await generateMonthlyDues(selectedMonth, selectedYear, 'Manual (Admin)', true);
+      const res = await generateMonthlyDues(selectedMonth, selectedYear, 'Manual (Admin)', false);
       if (res.billedCount > 0) {
         setToast({
           type: 'success',
@@ -253,14 +253,14 @@ const Collections = () => {
               >
                 Billing Logs
               </Button>
-              {unbilledCount > 0 ? (
+              {!isMonthBilled ? (
                 <Button
                   variant="secondary"
                   icon={CalendarPlus}
                   onClick={() => setIsGenerateDuesOpen(true)}
                   title={`Generate monthly maintenance dues for ${monthName} ${selectedYear}`}
                 >
-                  Generate Dues ({unbilledCount})
+                  Generate Dues
                 </Button>
               ) : (
                 <button
